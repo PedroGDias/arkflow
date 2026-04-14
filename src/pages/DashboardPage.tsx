@@ -198,7 +198,7 @@ export function DashboardPage() {
   }, [runs, totalRuns])
 
   return (
-    <>
+    <div className="page">
       <header className="header">
         <div className="wrap">
           <a className="logo" href="#">
@@ -531,7 +531,7 @@ export function DashboardPage() {
       <footer className="footer">
         <div className="wrap">Powered by <a href="#">Arkflow</a> · We automate your manual work.</div>
       </footer>
-    </>
+    </div>
   )
 }
 
