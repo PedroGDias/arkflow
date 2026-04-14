@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Autocares Julia">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#111111"/>
+      <stop offset="1" stop-color="#333333"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="256" height="256" rx="64" fill="url(#g)"/>
+  <path d="M78 78h36v20H98v78c0 10 7 18 18 18 11 0 18-8 18-18v-14h22v14c0 23-17 40-40 40s-40-17-40-40V78z" fill="#ffffff"/>
+  <circle cx="180" cy="82" r="10" fill="#ffffff" opacity="0.9"/>
+</svg>
+

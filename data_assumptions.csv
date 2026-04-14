@@ -1,0 +1,7 @@
+parameter,value,unit
+avg_monthly_salary,1800,EUR
+working_hours_per_month,173.2,hours
+automation_effectiveness_rate,0.7,ratio
+booking_emails_pct,0.3,ratio
+total_emails_per_month,8000,count
+cost_per_hour,10.39,EUR

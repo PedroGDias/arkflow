@@ -1,0 +1,6 @@
+process_es,process_en,monthly_volume,avg_time_min,monthly_hours,monthly_cost_eur,annual_cost_eur,notes,priority
+Solicitudes de presupuesto,Booking Requests,2400,5,200,2078.52,24942.26,Incomplete requests requiring back-and-forth,HIGH
+Respuestas a FAQs,FAQ Responses,1600,4,106.67,1108.55,13302.54,Standard policy questions,HIGH
+Seguimiento de reservas confirmadas,Booking Follow-ups,2000,5,166.67,1732.1,20785.22,Status updates to clients,MEDIUM
+Otras comunicaciones administrativas,Admin Communications,2000,3,100,1039.26,12471.13,"Invoices, general queries",LOW
+TOTAL,TOTAL,8000,,573.33,5958.43,71501.15,,

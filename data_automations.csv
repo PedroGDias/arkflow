@@ -1,0 +1,6 @@
+id,workflow,impl_cost_eur,monthly_retainer_eur,monthly_saving_eur,payback_months,annual_net_roi_eur,complexity,timeline,status
+1,Booking email automation (pilot),1500,300,1454.97,1.03,12359.58,LOW,Done,ACTIVE
+2,FAQ & policy auto-responses,2000,0,,,,LOW,2 weeks,PROPOSED
+3,Booking confirmation follow-up,1500,0,,,,MEDIUM,3 weeks,PROPOSED
+4,ERP Ingenia integration,4000,0,,,,HIGH,4-6 weeks,ROADMAP
+5,Invoice & reconciliation automation,3000,0,,,,HIGH,4-6 weeks,ROADMAP
