@@ -43,7 +43,25 @@ export function AuthCallbackPage() {
   if (err) {
     return (
       <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
-        <div className="error-msg">{err}</div>
+        <div style={{ width: 'min(520px, 100%)' }}>
+          <div className="error-msg" style={{ marginBottom: 12 }}>
+            {err}
+          </div>
+          <button
+            onClick={() => nav('/login', { replace: true })}
+            style={{
+              width: '100%',
+              borderRadius: 10,
+              border: '1px solid var(--border)',
+              padding: '12px 14px',
+              background: 'var(--white)',
+              fontFamily: 'var(--mono)',
+              cursor: 'pointer',
+            }}
+          >
+            Back to login
+          </button>
+        </div>
       </div>
     )
   }
