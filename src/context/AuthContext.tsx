@@ -1,5 +1,6 @@
 import type { Session } from '@supabase/supabase-js'
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from 'react'
+import { isAllowedEmail } from '../lib/authz'
 import { env } from '../lib/env'
 import { supabase } from '../lib/supabase'
 
@@ -32,12 +33,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setInitializing(false)
       return
     }
+    const sb = supabase
 
     let mounted = true
-    supabase.auth
+    sb.auth
       .getSession()
       .then(({ data }) => {
         if (!mounted) return
+        if (data.session && !isAllowedEmail(data.session.user.email)) {
+          void sb.auth.signOut()
+          setSession(null)
+          setInitializing(false)
+          return
+        }
         setSession(data.session ?? null)
         setInitializing(false)
       })
@@ -47,7 +55,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setInitializing(false)
       })
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, s) => {
+    const { data: sub } = sb.auth.onAuthStateChange((_evt, s) => {
+      if (s && !isAllowedEmail(s.user.email)) {
+        void sb.auth.signOut()
+        setSession(null)
+        setInitializing(false)
+        return
+      }
       setSession(s)
       setInitializing(false)
     })

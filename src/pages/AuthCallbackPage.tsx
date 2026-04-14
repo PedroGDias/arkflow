@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { isAllowedEmail } from '../lib/authz'
 import { env } from '../lib/env'
 import { supabase } from '../lib/supabase'
 
@@ -12,13 +13,21 @@ export function AuthCallbackPage() {
       nav('/', { replace: true })
       return
     }
+    const sb = supabase
     let mounted = true
-    supabase.auth
+    sb.auth
       .getSession()
       .then(({ data, error }) => {
         if (!mounted) return
         if (error) throw error
         if (!data.session) throw new Error('No session after callback')
+
+        const email = data.session.user.email
+        if (!isAllowedEmail(email)) {
+          void sb.auth.signOut()
+          throw new Error('Please sign in with your @arkflow.ai Google account.')
+        }
+
         nav('/', { replace: true })
       })
       .catch((e) => {
