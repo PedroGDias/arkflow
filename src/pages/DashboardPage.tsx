@@ -49,6 +49,7 @@ export function DashboardPage() {
         peakHour: 'Peak Hour',
         peakDay: 'Peak Day',
         byHour: 'By Hour of Day',
+        respTimeByHour: 'Avg Response Time by Hour (s)',
         byWeekday: 'By Weekday',
         performance: 'Performance',
         perfImprovement: 'Performance Improvement',
@@ -81,6 +82,7 @@ export function DashboardPage() {
         peakHour: 'Hora pico',
         peakDay: 'Día pico',
         byHour: 'Por hora del día',
+        respTimeByHour: 'Tiempo medio por hora (s)',
         byWeekday: 'Por día de la semana',
         performance: 'Rendimiento',
         perfImprovement: 'Mejora de rendimiento',
@@ -129,10 +131,11 @@ export function DashboardPage() {
         setError('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.')
         return
       }
+      const sb = supabase
       const cid = env.clientId
       const [aRes, rRes] = await Promise.all([
-        supabase.from('automations').select('*').eq('client_id', cid),
-        supabase
+        sb.from('automations').select('*').eq('client_id', cid),
+        sb
           .from('runs')
           .select('*,automations!inner(client_id,automation_name)')
           .eq('automations.client_id', cid)
@@ -146,19 +149,25 @@ export function DashboardPage() {
       setAutos((aRes.data ?? []) as Automation[])
       setRuns((rRes.data ?? []) as unknown as Run[])
 
-      // Conversation stats are optional: don't block dashboard if table/policy isn't ready.
-      const [totRes, doneRes] = await Promise.all([
-        supabase.from('julia_thread_stats_prod').select('*', { count: 'exact', head: true }),
-        supabase.from('julia_thread_stats_prod').select('*', { count: 'exact', head: true }).eq('status', 'completed'),
-      ])
+      // Thread-level conversation stats (pending/completed).
+      // Assumption: 1 row in julia_thread_stats_prod == 1 thread.
+      // Optional: don't block dashboard if table/policy isn't ready.
+      try {
+        const [totRes, doneRes] = await Promise.all([
+          sb.from('julia_thread_stats_prod').select('*', { count: 'exact', head: true }),
+          sb.from('julia_thread_stats_prod').select('*', { count: 'exact', head: true }).eq('status', 'completed'),
+        ])
 
-      if (totRes.error || doneRes.error) {
+        if (totRes.error || doneRes.error) {
+          setThreadTotals({ total: null, completed: null })
+        } else {
+          setThreadTotals({
+            total: totRes.count ?? 0,
+            completed: doneRes.count ?? 0,
+          })
+        }
+      } catch {
         setThreadTotals({ total: null, completed: null })
-      } else {
-        setThreadTotals({
-          total: totRes.count ?? 0,
-          completed: doneRes.count ?? 0,
-        })
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
@@ -290,7 +299,9 @@ export function DashboardPage() {
             </div>
             <div className="kpi highlight">
               <div className="kpi-val" id="kFinishedPct">
-                {totalThreads != null && totalThreads > 0 ? `${finishedPct.toFixed(0)}%` : '–'}
+                {totalThreads != null && totalThreads > 0
+                  ? `${finishedPct.toFixed(0)}% (${completedThreads ?? 0}/${totalThreads})`
+                  : '–'}
               </div>
               <div className="kpi-lbl">{t.completed}</div>
             </div>
@@ -353,7 +364,7 @@ export function DashboardPage() {
                 const hourTotal = r.length || 1
                 const maxH = Math.max(...hourCounts, 1)
                 const peakH = hourCounts.indexOf(Math.max(...hourCounts, 0))
-                const peakHlbl = peakH === 0 ? '12am' : peakH < 12 ? `${peakH}am` : peakH === 12 ? '12pm' : `${peakH - 12}pm`
+                const peakHlbl = `${peakH}h`
 
                 const wdCounts = new Array(7).fill(0)
                 for (const x of r) wdCounts[new Date(x.created_at).getDay()]++
@@ -372,6 +383,15 @@ export function DashboardPage() {
                 }
                 const dayKeys = Object.keys(days).reverse()
                 const maxDayAvg = Math.max(...dayKeys.map((d) => days[d].timeSum / days[d].total), 1)
+
+                const hourResp = new Array(24).fill(0).map(() => ({ count: 0, timeSum: 0 }))
+                for (const x of r) {
+                  const h = new Date(x.created_at).getHours()
+                  hourResp[h].count++
+                  hourResp[h].timeSum += x.response_time ?? 0
+                }
+                const hourAvgs = hourResp.map((v) => (v.count > 0 ? v.timeSum / v.count : 0))
+                const maxHourAvg = Math.max(...hourAvgs, 1)
 
                 const isOpen = openIds.has(a.id)
 
@@ -407,7 +427,9 @@ export function DashboardPage() {
                       {showThreadStats ? (
                         <div className="auto-stat good">
                           <small>{t.completed}</small>
-                          <span className="val">{totalThreads != null && totalThreads > 0 ? `${finishedPct.toFixed(0)}%` : '–'}</span>
+                          <span className="val">
+                            {totalThreads != null && totalThreads > 0 ? `${finishedPct.toFixed(0)}%` : '–'}
+                          </span>
                         </div>
                       ) : null}
                       <div className="auto-stat hl">
@@ -434,11 +456,7 @@ export function DashboardPage() {
                     <div className="auto-detail">
                       <div className="detail-strip">
                         <div className="strip-head">{t.volume}</div>
-                        <div className="strip-nums">
-                          <div className="strip-num">
-                            <div className="sn-lbl">{t.totalMsgs}</div>
-                            <div className="sn-val">{r.length}</div>
-                          </div>
+                        <div className="strip-nums three-wide">
                           <div className="strip-num">
                             <div className="sn-lbl">{t.peakHour}</div>
                             <div className="sn-val">{r.length > 0 ? peakHlbl : '–'}</div>
@@ -447,26 +465,28 @@ export function DashboardPage() {
                             <div className="sn-lbl">{t.peakDay}</div>
                             <div className="sn-val">{r.length > 0 ? peakWdLabel : '–'}</div>
                           </div>
-                        </div>
-                        <div className="strip-charts">
-                          <div className="strip-chart">
-                            <div className="mini-chart-title">{t.byHour}</div>
-                            <div className="hour-bars">
+                          <div className="strip-num chart wide">
+                            <div className="sn-lbl">{t.byHour}</div>
+                            <div className="hour-bars hour-bars-compact">
                               {hourCounts.map((cnt, h) => {
                                 const pct = (cnt / maxH) * 100
                                 const dispPct = Math.round((cnt / hourTotal) * 100)
-                                const ampm = h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`
-                                const showLbl = h % 3 === 0
                                 return (
                                   <div className="hour-bar-g" key={h}>
                                     <div className="hour-bar-v">{cnt > 0 ? `${dispPct}%` : ''}</div>
                                     <div className={`hour-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${Math.max(pct, cnt > 0 ? 6 : 0)}%` }}></div>
-                                    <div className="hour-lbl">{showLbl ? ampm : ''}</div>
+                                    <div className="hour-lbl">{`${h}h`}</div>
                                   </div>
                                 )
                               })}
                             </div>
                           </div>
+                        </div>
+                      </div>
+
+                      <div className="detail-strip">
+                        <div className="strip-head">{t.performance}</div>
+                        <div className="strip-charts three">
                           <div className="strip-chart">
                             <div className="mini-chart-title">{t.byWeekday}</div>
                             <div className="mini-bars">
@@ -484,22 +504,7 @@ export function DashboardPage() {
                               })}
                             </div>
                           </div>
-                        </div>
-                      </div>
 
-                      <div className="detail-strip">
-                        <div className="strip-head">{t.performance}</div>
-                        <div className="strip-nums">
-                          <div className="strip-num">
-                            <div className="sn-lbl">{t.avgResponseTime}</div>
-                            <div className="sn-val">{avgRespA > 0 ? `${avgRespA.toFixed(0)}s` : '–'}</div>
-                          </div>
-                          <div className="strip-num">
-                            <div className="sn-lbl">{t.perfImprovement}</div>
-                            <div className="sn-val green">{perfPct > 0 ? `${perfPct.toFixed(0)}%` : '–'}</div>
-                          </div>
-                        </div>
-                        <div className="strip-charts" style={{ gridTemplateColumns: '1fr' }}>
                           <div className="strip-chart">
                             <div className="mini-chart-title">{t.avgRespByDay}</div>
                             <div className="mini-bars">
@@ -513,6 +518,22 @@ export function DashboardPage() {
                                     <div className="mini-bar-v">{avg.toFixed(0)}s</div>
                                     <div className="mini-bar" style={{ height: `${Math.max(pct, 6)}%` }}></div>
                                     <div className="mini-bar-lbl">{label}</div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="strip-chart">
+                            <div className="mini-chart-title">{t.respTimeByHour}</div>
+                            <div className="mini-bars">
+                              {hourAvgs.map((avg, h) => {
+                                const pct = (avg / maxHourAvg) * 100
+                                return (
+                                  <div className="mini-bar-g" key={h}>
+                                    <div className="mini-bar-v">{avg > 0 ? `${avg.toFixed(0)}s` : ''}</div>
+                                    <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${Math.max(pct, avg > 0 ? 6 : 0)}%` }}></div>
+                                    <div className="mini-bar-lbl">{`${h}h`}</div>
                                   </div>
                                 )
                               })}
