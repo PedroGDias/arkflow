@@ -37,7 +37,7 @@ export function DashboardPage() {
         avgResponseTime: 'Avg Response Time',
         vsManual5m: 'vs MANUAL 1h34m',
         timeSaved: '⏱ Time Saved',
-        timeSavedHow: 'Total staff time recovered based on the agreed manual handling time per request (5 min), multiplied by total msgs processed.',
+        timeSavedHow: 'Total staff time recovered based on the agreed manual handling time per request (5 min), multiplied by total replies processed.',
         avgRespHow: "Average response time of the automation's messages in production, compared to a 5 minute manual baseline.",
         totalConversations: 'Customers',
         pctFinished: '% Finished',
@@ -45,7 +45,7 @@ export function DashboardPage() {
         automations: 'Automations',
         active: 'active',
         volume: 'Volume',
-        totalMsgs: 'Total Msgs',
+        totalMsgs: 'Total Replies',
         peakHour: 'Peak Hour',
         peakDay: 'Peak Day',
         byHour: 'By Hour of Day',
@@ -53,11 +53,11 @@ export function DashboardPage() {
         performance: 'Performance',
         perfImprovement: 'Performance Improvement',
         avgRespByDay: 'Avg Response Time by Day (s)',
-        msgs: 'Msgs',
+        msgs: 'Replies',
         avg: 'Avg',
         saved: '⏱ Saved',
         perf: 'Perf',
-        lastMsg: 'Last Msg',
+        lastMsg: 'Last Reply',
         justNow: 'just now',
         quoteRequest: 'Quote Request',
         completed: 'Completed',
@@ -68,7 +68,8 @@ export function DashboardPage() {
         avgResponseTime: 'Tiempo medio de respuesta',
         vsManual5m: 'vs MANUAL 1h34m',
         timeSaved: '⏱ Tiempo ahorrado',
-        timeSavedHow: 'Tiempo total recuperado según el tiempo manual acordado por solicitud (5 min), multiplicado por el total de msgs procesados.',
+        timeSavedHow:
+          'Tiempo total recuperado según el tiempo manual acordado por solicitud (5 min), multiplicado por el total de respuestas procesadas.',
         avgRespHow: 'Tiempo medio de respuesta de los mensajes en producción, comparado con una línea base manual de 5 minutos.',
         totalConversations: 'Clientes',
         pctFinished: '% finalizadas',
@@ -76,7 +77,7 @@ export function DashboardPage() {
         automations: 'Automatizaciones',
         active: 'activas',
         volume: 'Volumen',
-        totalMsgs: 'Msgs totales',
+        totalMsgs: 'Respuestas totales',
         peakHour: 'Hora pico',
         peakDay: 'Día pico',
         byHour: 'Por hora del día',
@@ -84,11 +85,11 @@ export function DashboardPage() {
         performance: 'Rendimiento',
         perfImprovement: 'Mejora de rendimiento',
         avgRespByDay: 'Tiempo medio por día (s)',
-        msgs: 'Msgs',
+        msgs: 'Respuestas',
         avg: 'Media',
         saved: '⏱ Ahorrado',
         perf: 'Rend.',
-        lastMsg: 'Último msg',
+        lastMsg: 'Última respuesta',
         justNow: 'ahora mismo',
         quoteRequest: 'Solicitud de Presupuesto',
         completed: 'Completadas',
@@ -147,8 +148,8 @@ export function DashboardPage() {
 
       // Conversation stats are optional: don't block dashboard if table/policy isn't ready.
       const [totRes, doneRes] = await Promise.all([
-        supabase.from('julia_thread_stats').select('*', { count: 'exact', head: true }),
-        supabase.from('julia_thread_stats').select('*', { count: 'exact', head: true }).eq('status', 'completed'),
+        supabase.from('julia_thread_stats_prod').select('*', { count: 'exact', head: true }),
+        supabase.from('julia_thread_stats_prod').select('*', { count: 'exact', head: true }).eq('status', 'completed'),
       ])
 
       if (totRes.error || doneRes.error) {
@@ -267,7 +268,7 @@ export function DashboardPage() {
           <div className="kpis">
             <div className="kpi">
               <div className="kpi-val green" id="kAvgResp">
-                {kpis.avgRespS > 0 ? `${kpis.avgRespS.toFixed(1)}s` : '–'}
+                {kpis.avgRespS > 0 ? `${kpis.avgRespS.toFixed(0)}s` : '–'}
               </div>
               <div className="kpi-lbl">
                 {t.avgResponseTime} <span style={{ color: 'var(--text4)' }}>({t.vsManual5m})</span>
@@ -340,7 +341,7 @@ export function DashboardPage() {
             <div className="auto-list">
               {Object.values(byAuto).map((a) => {
                 const r = a.runs
-                const avgT = r.length > 0 ? (r.reduce((s, x) => s + (x.response_time ?? 0), 0) / r.length).toFixed(1) : '–'
+                const avgT = r.length > 0 ? (r.reduce((s, x) => s + (x.response_time ?? 0), 0) / r.length).toFixed(0) : '–'
                 const last = r.length > 0 ? relLang(r[0].created_at) : '–'
                 const showThreadStats = isQuoteAutomation(a)
 
@@ -421,7 +422,7 @@ export function DashboardPage() {
                         <small>
                           {t.perf} <span className="arrow">↑</span>
                         </small>
-                        <span className="val">{perfPct.toFixed(1)}%</span>
+                        <span className="val">{perfPct.toFixed(0)}%</span>
                       </div>
                       <div className="auto-stat">
                         <small>{t.lastMsg}</small>
@@ -491,11 +492,11 @@ export function DashboardPage() {
                         <div className="strip-nums">
                           <div className="strip-num">
                             <div className="sn-lbl">{t.avgResponseTime}</div>
-                            <div className="sn-val">{avgRespA > 0 ? `${avgRespA.toFixed(1)}s` : '–'}</div>
+                            <div className="sn-val">{avgRespA > 0 ? `${avgRespA.toFixed(0)}s` : '–'}</div>
                           </div>
                           <div className="strip-num">
                             <div className="sn-lbl">{t.perfImprovement}</div>
-                            <div className="sn-val green">{perfPct > 0 ? `${perfPct.toFixed(1)}%` : '–'}</div>
+                            <div className="sn-val green">{perfPct > 0 ? `${perfPct.toFixed(0)}%` : '–'}</div>
                           </div>
                         </div>
                         <div className="strip-charts" style={{ gridTemplateColumns: '1fr' }}>

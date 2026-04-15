@@ -1,9 +1,5 @@
--- Allow anon reads for julia_thread_stats_prod so the dashboard can show
--- total conversations and % finished.
---
--- This mirrors the temporary dashboard policies for `automations` and `runs`.
--- If you later add client scoping (e.g. client_id), replace `using (true)`
--- with a client filter and remove the broad grant.
+-- Ensure both anon + authenticated can SELECT julia_thread_stats_prod.
+-- The dashboard runs with a logged-in session, so role is typically `authenticated`.
 
 alter table public.julia_thread_stats_prod enable row level security;
 

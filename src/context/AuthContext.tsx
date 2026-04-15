@@ -80,7 +80,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signInWithGoogle: async () => {
         if (env.authMode === 'mock') return
         if (!supabase) throw new Error('Supabase auth is not configured')
-        const origin = env.oauthRedirectTo ?? window.location.origin
+        const currentOrigin = window.location.origin
+        const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        const origin = isLocalhost ? currentOrigin : (env.oauthRedirectTo ?? currentOrigin)
         const { error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
           options: {
