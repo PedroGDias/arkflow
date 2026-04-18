@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { env } from '../lib/env'
 import { supabase } from '../lib/supabase'
@@ -23,11 +23,15 @@ export function DashboardPage() {
   const [autos, setAutos] = useState<Automation[]>([])
   const [runs, setRuns] = useState<Run[]>([])
   const [threadTotals, setThreadTotals] = useState<{ total: number | null; completed: number | null }>({ total: null, completed: null })
+  const [threadDayCounts, setThreadDayCounts] = useState<Record<string, number> | null>(null)
 
   const [lang, setLang] = useState<'EN' | 'ES'>('EN')
 
   const [openIds, setOpenIds] = useState<Set<number>>(() => new Set())
   const [howOpen, setHowOpen] = useState(false)
+
+  const rowEls = useRef(new Map<number, HTMLDivElement>())
+  const prevOpenIds = useRef<Set<number>>(new Set())
 
   const t = useMemo(() => {
     const dict = {
@@ -46,14 +50,15 @@ export function DashboardPage() {
         active: 'active',
         volume: 'Volume',
         totalMsgs: 'Total Replies',
-        peakHour: 'Peak Hour',
-        peakDay: 'Peak Day',
+        repliesL10D: 'Replies / Day (L10D)',
+        customersL10D: 'Customers / Day (L10D)',
         byHour: 'By Hour of Day',
         respTimeByHour: 'Avg Response Time by Hour (s)',
         byWeekday: 'By Weekday',
         performance: 'Performance',
         perfImprovement: 'Performance Improvement',
         avgRespByDay: 'Avg Response Time by Day (s)',
+        savedTimeL10D: 'Saved Time / Day (L10D)',
         msgs: 'Replies',
         avg: 'Avg',
         saved: '⏱ Saved',
@@ -79,14 +84,15 @@ export function DashboardPage() {
         active: 'activas',
         volume: 'Volumen',
         totalMsgs: 'Respuestas totales',
-        peakHour: 'Hora pico',
-        peakDay: 'Día pico',
+        repliesL10D: 'Respuestas / día (L10D)',
+        customersL10D: 'Clientes / día (L10D)',
         byHour: 'Por hora del día',
         respTimeByHour: 'Tiempo medio por hora (s)',
         byWeekday: 'Por día de la semana',
         performance: 'Rendimiento',
         perfImprovement: 'Mejora de rendimiento',
         avgRespByDay: 'Tiempo medio por día (s)',
+        savedTimeL10D: 'Tiempo ahorrado / día (L10D)',
         msgs: 'Respuestas',
         avg: 'Media',
         saved: '⏱ Ahorrado',
@@ -111,14 +117,23 @@ export function DashboardPage() {
   }
 
   function displayAutomationName(a: Automation) {
-    const name = (a.automation_name ?? '').toLowerCase()
-    if (name.includes('quote') || name.includes('presupuesto')) return t.quoteRequest
-    return a.automation_name
+    const en = a.automation_name_en ?? a.automation_name ?? ''
+    const local = a.automation_name_local ?? a.automation_name_es ?? a.automation_name ?? ''
+    const chosen = lang === 'ES' ? local : en
+    return chosen || a.automation_name || '—'
   }
 
   function isQuoteAutomation(a: Automation) {
-    const name = (a.automation_name ?? '').toLowerCase()
-    return name.includes('quote') || name.includes('presupuesto')
+    const candidates = [
+      a.automation_name_en,
+      a.automation_name_local,
+      a.automation_name_es,
+      a.automation_name,
+    ]
+      .filter(Boolean)
+      .map((s) => String(s).toLowerCase())
+      .join(' ')
+    return candidates.includes('quote') || candidates.includes('presupuesto')
   }
 
   async function load() {
@@ -137,7 +152,7 @@ export function DashboardPage() {
         sb.from('automations').select('*').eq('client_id', cid),
         sb
           .from('runs')
-          .select('*,automations!inner(client_id,automation_name)')
+          .select('*,automations!inner(client_id)')
           .eq('automations.client_id', cid)
           .order('created_at', { ascending: false })
           .limit(10000),
@@ -153,9 +168,11 @@ export function DashboardPage() {
       // Assumption: 1 row in julia_thread_stats_prod == 1 thread.
       // Optional: don't block dashboard if table/policy isn't ready.
       try {
-        const [totRes, doneRes] = await Promise.all([
+        const since = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString()
+        const [totRes, doneRes, dayRes] = await Promise.all([
           sb.from('julia_thread_stats_prod').select('*', { count: 'exact', head: true }),
           sb.from('julia_thread_stats_prod').select('*', { count: 'exact', head: true }).eq('status', 'completed'),
+          sb.from('julia_thread_stats_prod').select('created_at').gte('created_at', since).order('created_at', { ascending: true }).limit(20000),
         ])
 
         if (totRes.error || doneRes.error) {
@@ -166,8 +183,22 @@ export function DashboardPage() {
             completed: doneRes.count ?? 0,
           })
         }
+
+        if (dayRes.error) {
+          setThreadDayCounts(null)
+        } else {
+          const m: Record<string, number> = {}
+          for (const row of dayRes.data ?? []) {
+            // created_at is assumed to be ISO timestamps; bucket by local day.
+            const d = new Date((row as { created_at: string }).created_at)
+            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+            m[key] = (m[key] ?? 0) + 1
+          }
+          setThreadDayCounts(m)
+        }
       } catch {
         setThreadTotals({ total: null, completed: null })
+        setThreadDayCounts(null)
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
@@ -182,6 +213,24 @@ export function DashboardPage() {
     return () => window.clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    const prev = prevOpenIds.current
+    const newlyOpened = Array.from(openIds).filter((id) => !prev.has(id))
+    prevOpenIds.current = new Set(openIds)
+
+    if (newlyOpened.length === 0) return
+
+    const targetId = newlyOpened[newlyOpened.length - 1]
+    const el = rowEls.current.get(targetId)
+    if (!el) return
+
+    // Wait a frame so the "open" class + height transition are applied,
+    // then scroll the row into view.
+    requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }, [openIds])
 
   const byAuto: Record<number, AutoWithRuns> = useMemo(() => {
     const m: Record<number, AutoWithRuns> = {}
@@ -363,26 +412,60 @@ export function DashboardPage() {
                 for (const x of r) hourCounts[new Date(x.created_at).getHours()]++
                 const hourTotal = r.length || 1
                 const maxH = Math.max(...hourCounts, 1)
-                const peakH = hourCounts.indexOf(Math.max(...hourCounts, 0))
-                const peakHlbl = `${peakH}h`
 
                 const wdCounts = new Array(7).fill(0)
                 for (const x of r) wdCounts[new Date(x.created_at).getDay()]++
                 const wdOrder = [1, 2, 3, 4, 5, 6, 0]
-                const wdLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+                const wdLabels =
+                  lang === 'ES' ? ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'] : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
                 const maxWd = Math.max(...wdOrder.map((d) => wdCounts[d]), 1)
-                const peakWdIdx = wdOrder.reduce((best, di, i) => (wdCounts[di] > wdCounts[wdOrder[best]] ? i : best), 0)
-                const peakWdLabel = wdLabels[peakWdIdx]
 
                 const days: Record<string, { total: number; timeSum: number }> = {}
                 for (const x of r) {
-                  const day = new Date(x.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-                  days[day] ??= { total: 0, timeSum: 0 }
-                  days[day].total++
-                  days[day].timeSum += x.response_time ?? 0
+                  const d = new Date(x.created_at)
+                  const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+                  days[key] ??= { total: 0, timeSum: 0 }
+                  days[key].total++
+                  days[key].timeSum += x.response_time ?? 0
                 }
-                const dayKeys = Object.keys(days).reverse()
-                const maxDayAvg = Math.max(...dayKeys.map((d) => days[d].timeSum / days[d].total), 1)
+
+                const last10DayKeys = (() => {
+                  const keys: string[] = []
+                  const today = new Date()
+                  for (let i = 9; i >= 0; i--) {
+                    const d = new Date(today)
+                    d.setDate(today.getDate() - i)
+                    keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
+                  }
+                  return keys
+                })()
+                const l10dLabels = last10DayKeys.map((k) => {
+                  // Parse YYYY-MM-DD as a local date; use noon to avoid DST edge cases.
+                  const [yy, mm, dd] = k.split('-').map((v) => Number(v))
+                  const d = new Date(yy, (mm ?? 1) - 1, dd ?? 1, 12, 0, 0)
+                  const locale = lang === 'ES' ? 'es-ES' : 'en-GB'
+                  return d.toLocaleDateString(locale, { day: '2-digit', month: 'short' })
+                })
+                const avgRespSByDayL10D = last10DayKeys.map((k) => {
+                  const dd = days[k]
+                  if (!dd || dd.total === 0) return 0
+                  return dd.timeSum / dd.total
+                })
+                const maxDayAvgL10D = Math.max(...avgRespSByDayL10D, 1)
+                const repliesByDayL10D = (() => {
+                  const m: Record<string, number> = {}
+                  for (const x of r) {
+                    const d = new Date(x.created_at)
+                    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+                    m[key] = (m[key] ?? 0) + 1
+                  }
+                  return last10DayKeys.map((k) => m[k] ?? 0)
+                })()
+                const savedMinsByDayL10D = repliesByDayL10D.map((cnt) => cnt * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN)
+                const customersByDayL10D = last10DayKeys.map((k) => (threadDayCounts?.[k] ?? 0))
+                const maxRepliesL10D = Math.max(...repliesByDayL10D, 1)
+                const maxSavedMinsL10D = Math.max(...savedMinsByDayL10D, 1)
+                const maxCustomersL10D = Math.max(...customersByDayL10D, 1)
 
                 const hourResp = new Array(24).fill(0).map(() => ({ count: 0, timeSum: 0 }))
                 for (const x of r) {
@@ -396,7 +479,15 @@ export function DashboardPage() {
                 const isOpen = openIds.has(a.id)
 
                 return (
-                  <div key={a.id} className={`auto-row ${isOpen ? 'open' : ''}`} data-auto-id={a.id}>
+                  <div
+                    key={a.id}
+                    className={`auto-row ${isOpen ? 'open' : ''}`}
+                    data-auto-id={a.id}
+                    ref={(node) => {
+                      if (node) rowEls.current.set(a.id, node)
+                      else rowEls.current.delete(a.id)
+                    }}
+                  >
                     <div
                       className="auto-summary"
                       onClick={() => {
@@ -456,16 +547,43 @@ export function DashboardPage() {
                     <div className="auto-detail">
                       <div className="detail-strip">
                         <div className="strip-head">{t.volume}</div>
-                        <div className="strip-nums three-wide">
-                          <div className="strip-num">
-                            <div className="sn-lbl">{t.peakHour}</div>
-                            <div className="sn-val">{r.length > 0 ? peakHlbl : '–'}</div>
+                        <div className="strip-nums volume-four">
+                          <div className="strip-num chart">
+                            <div className="sn-lbl">{t.repliesL10D}</div>
+                            <div className="mini-bars mini-bars-compact">
+                              {repliesByDayL10D.map((cnt, i) => {
+                                const pct = (cnt / maxRepliesL10D) * 100
+                                return (
+                                  <div className="mini-bar-g" key={last10DayKeys[i]}>
+                                    <div className="mini-bar-v">{cnt > 0 ? `${cnt}` : ''}</div>
+                                    <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${Math.max(pct, cnt > 0 ? 6 : 0)}%` }}></div>
+                                    <div className="mini-bar-lbl">{l10dLabels[i]}</div>
+                                  </div>
+                                )
+                              })}
+                            </div>
                           </div>
-                          <div className="strip-num">
-                            <div className="sn-lbl">{t.peakDay}</div>
-                            <div className="sn-val">{r.length > 0 ? peakWdLabel : '–'}</div>
+
+                          <div className="strip-num chart">
+                            <div className="sn-lbl">{t.customersL10D}</div>
+                            <div className="mini-bars mini-bars-compact">
+                              {(showThreadStats ? customersByDayL10D : last10DayKeys.map(() => 0)).map((cnt, i) => {
+                                const pct = (cnt / maxCustomersL10D) * 100
+                                return (
+                                  <div className="mini-bar-g" key={last10DayKeys[i]}>
+                                    <div className="mini-bar-v">{showThreadStats && cnt > 0 ? `${cnt}` : ''}</div>
+                                    <div
+                                      className={`mini-bar ${!showThreadStats || cnt === 0 ? 'zero' : ''}`}
+                                      style={{ height: `${Math.max(pct, showThreadStats && cnt > 0 ? 6 : 0)}%` }}
+                                    ></div>
+                                    <div className="mini-bar-lbl">{l10dLabels[i]}</div>
+                                  </div>
+                                )
+                              })}
+                            </div>
                           </div>
-                          <div className="strip-num chart wide">
+
+                          <div className="strip-num chart">
                             <div className="sn-lbl">{t.byHour}</div>
                             <div className="hour-bars hour-bars-compact">
                               {hourCounts.map((cnt, h) => {
@@ -481,15 +599,10 @@ export function DashboardPage() {
                               })}
                             </div>
                           </div>
-                        </div>
-                      </div>
 
-                      <div className="detail-strip">
-                        <div className="strip-head">{t.performance}</div>
-                        <div className="strip-charts three">
-                          <div className="strip-chart">
-                            <div className="mini-chart-title">{t.byWeekday}</div>
-                            <div className="mini-bars">
+                          <div className="strip-num chart">
+                            <div className="sn-lbl">{t.byWeekday}</div>
+                            <div className="mini-bars mini-bars-compact">
                               {wdOrder.map((di, i) => {
                                 const cnt = wdCounts[di]
                                 const pct = (cnt / maxWd) * 100
@@ -504,20 +617,38 @@ export function DashboardPage() {
                               })}
                             </div>
                           </div>
+                        </div>
+                      </div>
 
+                      <div className="detail-strip">
+                        <div className="strip-head">{t.performance}</div>
+                        <div className="strip-charts three">
                           <div className="strip-chart">
                             <div className="mini-chart-title">{t.avgRespByDay}</div>
                             <div className="mini-bars">
-                              {dayKeys.map((d) => {
-                                const dd = days[d]
-                                const avg = dd.timeSum / dd.total
-                                const pct = (avg / maxDayAvg) * 100
-                                const label = d.split(' ').slice(0, 2).join(' ')
+                              {avgRespSByDayL10D.map((avg, i) => {
+                                const pct = (avg / maxDayAvgL10D) * 100
                                 return (
-                                  <div className="mini-bar-g" key={d}>
-                                    <div className="mini-bar-v">{avg.toFixed(0)}s</div>
-                                    <div className="mini-bar" style={{ height: `${Math.max(pct, 6)}%` }}></div>
-                                    <div className="mini-bar-lbl">{label}</div>
+                                  <div className="mini-bar-g" key={last10DayKeys[i]}>
+                                    <div className="mini-bar-v">{avg > 0 ? `${avg.toFixed(0)}s` : ''}</div>
+                                    <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${Math.max(pct, avg > 0 ? 6 : 0)}%` }}></div>
+                                    <div className="mini-bar-lbl">{l10dLabels[i]}</div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="strip-chart">
+                            <div className="mini-chart-title">{t.savedTimeL10D}</div>
+                            <div className="mini-bars">
+                              {savedMinsByDayL10D.map((mins, i) => {
+                                const pct = (mins / maxSavedMinsL10D) * 100
+                                return (
+                                  <div className="mini-bar-g" key={last10DayKeys[i]}>
+                                    <div className="mini-bar-v">{mins > 0 ? fmtTime(mins) : ''}</div>
+                                    <div className={`mini-bar ${mins === 0 ? 'zero' : ''}`} style={{ height: `${Math.max(pct, mins > 0 ? 6 : 0)}%` }}></div>
+                                    <div className="mini-bar-lbl">{l10dLabels[i]}</div>
                                   </div>
                                 )
                               })}
