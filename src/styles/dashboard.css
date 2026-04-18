@@ -215,17 +215,34 @@ body {
   font-family: var(--mono); font-size: 10px; text-transform: uppercase;
   letter-spacing: 0.08em; color: var(--text4); margin-bottom: 14px;
 }
-.mini-bars { display: flex; align-items: flex-end; gap: 5px; height: 88px; }
-.mini-bar-g { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; justify-content: flex-end; }
-.mini-bar { width: 100%; max-width: 36px; background: var(--black); border-radius: 3px 3px 0 0; min-height: 3px; transition: height .5s ease; }
+.mini-bars { display: flex; align-items: stretch; gap: 5px; height: 88px; }
+.mini-bar-g { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; min-height: 0; justify-content: flex-end; }
+/* Bar height % must be relative to this track only (not the full column incl. labels). */
+.mini-bar-track {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-height: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.mini-bar { width: 100%; max-width: 36px; background: var(--black); border-radius: 3px 3px 0 0; min-height: 0; transition: height .5s ease; }
 .mini-bar:hover { opacity: .6; }
 .mini-bar.zero { background: transparent; }
 .mini-bar-v { font-family: var(--mono); font-size: 10px; color: var(--text3); }
 .mini-bar-lbl { font-family: var(--mono); font-size: 9px; color: var(--text4); text-align: center; white-space: nowrap; }
 
-.hour-bars { display: flex; align-items: flex-end; gap: 2px; height: 72px; }
+.hour-bars { display: flex; align-items: stretch; gap: 2px; height: 72px; }
 .hour-bars.hour-bars-compact { height: 72px; }
-.hour-bar-g { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; height: 100%; justify-content: flex-end; }
+.hour-bar-g { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 0; justify-content: flex-end; }
+.hour-bar-track {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-height: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
 .hour-bar { width: 100%; background: var(--black); border-radius: 2px 2px 0 0; min-height: 0; transition: height .4s ease; }
 .hour-bar.zero { background: transparent; }
 .hour-bar:hover { opacity: .6; }

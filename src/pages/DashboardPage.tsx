@@ -556,7 +556,9 @@ export function DashboardPage() {
                                 return (
                                   <div className="mini-bar-g" key={last10DayKeys[i]}>
                                     <div className="mini-bar-v">{cnt > 0 ? `${cnt}` : ''}</div>
-                                    <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${Math.max(pct, cnt > 0 ? 6 : 0)}%` }}></div>
+                                    <div className="mini-bar-track">
+                                      <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                                    </div>
                                     <div className="mini-bar-lbl">{l10dLabels[i]}</div>
                                   </div>
                                 )
@@ -572,10 +574,12 @@ export function DashboardPage() {
                                 return (
                                   <div className="mini-bar-g" key={last10DayKeys[i]}>
                                     <div className="mini-bar-v">{showThreadStats && cnt > 0 ? `${cnt}` : ''}</div>
-                                    <div
-                                      className={`mini-bar ${!showThreadStats || cnt === 0 ? 'zero' : ''}`}
-                                      style={{ height: `${Math.max(pct, showThreadStats && cnt > 0 ? 6 : 0)}%` }}
-                                    ></div>
+                                    <div className="mini-bar-track">
+                                      <div
+                                        className={`mini-bar ${!showThreadStats || cnt === 0 ? 'zero' : ''}`}
+                                        style={{ height: `${pct}%` }}
+                                      ></div>
+                                    </div>
                                     <div className="mini-bar-lbl">{l10dLabels[i]}</div>
                                   </div>
                                 )
@@ -592,7 +596,9 @@ export function DashboardPage() {
                                 return (
                                   <div className="hour-bar-g" key={h}>
                                     <div className="hour-bar-v">{cnt > 0 ? `${dispPct}%` : ''}</div>
-                                    <div className={`hour-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${Math.max(pct, cnt > 0 ? 6 : 0)}%` }}></div>
+                                    <div className="hour-bar-track">
+                                      <div className={`hour-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                                    </div>
                                     <div className="hour-lbl">{`${h}h`}</div>
                                   </div>
                                 )
@@ -610,7 +616,9 @@ export function DashboardPage() {
                                 return (
                                   <div className="mini-bar-g" key={di}>
                                     <div className="mini-bar-v">{cnt > 0 ? `${dispPct}%` : ''}</div>
-                                    <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${Math.max(pct, cnt > 0 ? 6 : 0)}%` }}></div>
+                                    <div className="mini-bar-track">
+                                      <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                                    </div>
                                     <div className="mini-bar-lbl">{wdLabels[i]}</div>
                                   </div>
                                 )
@@ -631,7 +639,9 @@ export function DashboardPage() {
                                 return (
                                   <div className="mini-bar-g" key={last10DayKeys[i]}>
                                     <div className="mini-bar-v">{avg > 0 ? `${avg.toFixed(0)}s` : ''}</div>
-                                    <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${Math.max(pct, avg > 0 ? 6 : 0)}%` }}></div>
+                                    <div className="mini-bar-track">
+                                      <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                                    </div>
                                     <div className="mini-bar-lbl">{l10dLabels[i]}</div>
                                   </div>
                                 )
@@ -647,7 +657,9 @@ export function DashboardPage() {
                                 return (
                                   <div className="mini-bar-g" key={last10DayKeys[i]}>
                                     <div className="mini-bar-v">{mins > 0 ? fmtTime(mins) : ''}</div>
-                                    <div className={`mini-bar ${mins === 0 ? 'zero' : ''}`} style={{ height: `${Math.max(pct, mins > 0 ? 6 : 0)}%` }}></div>
+                                    <div className="mini-bar-track">
+                                      <div className={`mini-bar ${mins === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                                    </div>
                                     <div className="mini-bar-lbl">{l10dLabels[i]}</div>
                                   </div>
                                 )
@@ -663,7 +675,9 @@ export function DashboardPage() {
                                 return (
                                   <div className="mini-bar-g" key={h}>
                                     <div className="mini-bar-v">{avg > 0 ? `${avg.toFixed(0)}s` : ''}</div>
-                                    <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${Math.max(pct, avg > 0 ? 6 : 0)}%` }}></div>
+                                    <div className="mini-bar-track">
+                                      <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                                    </div>
                                     <div className="mini-bar-lbl">{`${h}h`}</div>
                                   </div>
                                 )
