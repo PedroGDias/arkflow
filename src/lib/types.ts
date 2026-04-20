@@ -7,6 +7,7 @@ export type Automation = {
   automation_name_en?: string
   automation_name_es?: string
   automation_name_local?: string
+  status?: 'Live' | 'Testing' | string | null
 }
 
 export type Run = {

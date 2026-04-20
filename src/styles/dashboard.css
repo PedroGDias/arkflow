@@ -11,6 +11,8 @@
   --black: #1a1a1a;
   --green: #1a7a3a;
   --green-bg: #e4f2e8;
+  --yellow: #9a6a00;
+  --yellow-bg: #fff2cf;
   --red: #b33a2a;
   --red-bg: #f5e6e3;
   --radius: 8px;
@@ -155,6 +157,8 @@ body {
   letter-spacing: 0.06em; color: var(--green); background: var(--green-bg);
   padding: 2px 8px; border-radius: 14px; font-weight: 400; flex-shrink: 0;
 }
+.row-live.testing { color: var(--yellow); background: var(--yellow-bg); }
+.row-live.testing .live-dot { background: var(--yellow); }
 .auto-stat {
   font-family: var(--mono); font-size: 15px; color: var(--text2);
   display: flex; flex-direction: column; align-items: center;

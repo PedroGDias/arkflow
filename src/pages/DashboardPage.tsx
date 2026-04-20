@@ -22,8 +22,9 @@ export function DashboardPage() {
 
   const [autos, setAutos] = useState<Automation[]>([])
   const [runs, setRuns] = useState<Run[]>([])
-  const [threadTotals, setThreadTotals] = useState<{ total: number | null; completed: number | null }>({ total: null, completed: null })
-  const [threadDayCounts, setThreadDayCounts] = useState<Record<string, number> | null>(null)
+  const [threadTotalsAll, setThreadTotalsAll] = useState<{ total: number | null; completed: number | null }>({ total: null, completed: null })
+  const [threadTotalsByAuto, setThreadTotalsByAuto] = useState<Record<number, { total: number; completed: number }> | null>(null)
+  const [threadDayCountsByAuto, setThreadDayCountsByAuto] = useState<Record<number, Record<string, number>> | null>(null)
 
   const [lang, setLang] = useState<'EN' | 'ES'>('EN')
 
@@ -142,7 +143,9 @@ export function DashboardPage() {
       if (!supabase) {
         setAutos([])
         setRuns([])
-        setThreadTotals({ total: null, completed: null })
+        setThreadTotalsAll({ total: null, completed: null })
+        setThreadTotalsByAuto(null)
+        setThreadDayCountsByAuto(null)
         setError('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.')
         return
       }
@@ -168,37 +171,63 @@ export function DashboardPage() {
       // Assumption: 1 row in julia_thread_stats_prod == 1 thread.
       // Optional: don't block dashboard if table/policy isn't ready.
       try {
-        const since = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString()
-        const [totRes, doneRes, dayRes] = await Promise.all([
-          sb.from('julia_thread_stats_prod').select('*', { count: 'exact', head: true }),
-          sb.from('julia_thread_stats_prod').select('*', { count: 'exact', head: true }).eq('status', 'completed'),
-          sb.from('julia_thread_stats_prod').select('created_at').gte('created_at', since).order('created_at', { ascending: true }).limit(20000),
-        ])
+        const sinceIso = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString()
+        const batchSize = 5000
+        const maxRows = 100000
+        const autoIds = ((aRes.data ?? []) as Automation[]).map((a) => a.id)
 
-        if (totRes.error || doneRes.error) {
-          setThreadTotals({ total: null, completed: null })
-        } else {
-          setThreadTotals({
-            total: totRes.count ?? 0,
-            completed: doneRes.count ?? 0,
-          })
+        const rows: Array<{ automation_id: number; status: string | null; created_at: string }> = []
+        if (autoIds.length === 0) {
+          setThreadTotalsAll({ total: 0, completed: 0 })
+          setThreadTotalsByAuto({})
+          setThreadDayCountsByAuto({})
+          return
+        }
+        for (let offset = 0; offset < maxRows; offset += batchSize) {
+          const res = await sb
+            .from('julia_thread_stats_prod')
+            .select('automation_id,status,created_at')
+            .in('automation_id', autoIds)
+            .order('created_at', { ascending: false })
+            .range(offset, offset + batchSize - 1)
+
+          if (res.error) throw res.error
+
+          const batch = (res.data ?? []) as unknown as Array<{ automation_id: number; status: string | null; created_at: string }>
+          rows.push(...batch)
+          if (batch.length < batchSize) break
         }
 
-        if (dayRes.error) {
-          setThreadDayCounts(null)
-        } else {
-          const m: Record<string, number> = {}
-          for (const row of dayRes.data ?? []) {
-            // created_at is assumed to be ISO timestamps; bucket by local day.
-            const d = new Date((row as { created_at: string }).created_at)
+        const totalsByAuto: Record<number, { total: number; completed: number }> = {}
+        const dayCountsByAuto: Record<number, Record<string, number>> = {}
+
+        let totalAll = 0
+        let completedAll = 0
+
+        for (const row of rows) {
+          totalAll++
+          if (row.status === 'completed') completedAll++
+
+          const aid = row.automation_id
+          totalsByAuto[aid] ??= { total: 0, completed: 0 }
+          totalsByAuto[aid].total++
+          if (row.status === 'completed') totalsByAuto[aid].completed++
+
+          if (row.created_at >= sinceIso) {
+            const d = new Date(row.created_at)
             const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-            m[key] = (m[key] ?? 0) + 1
+            dayCountsByAuto[aid] ??= {}
+            dayCountsByAuto[aid][key] = (dayCountsByAuto[aid][key] ?? 0) + 1
           }
-          setThreadDayCounts(m)
         }
+
+        setThreadTotalsAll({ total: totalAll, completed: completedAll })
+        setThreadTotalsByAuto(totalsByAuto)
+        setThreadDayCountsByAuto(dayCountsByAuto)
       } catch {
-        setThreadTotals({ total: null, completed: null })
-        setThreadDayCounts(null)
+        setThreadTotalsAll({ total: null, completed: null })
+        setThreadTotalsByAuto(null)
+        setThreadDayCountsByAuto(null)
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
@@ -243,8 +272,8 @@ export function DashboardPage() {
   }, [autos, runs])
 
   const totalRuns = runs.length
-  const totalThreads = threadTotals.total
-  const completedThreads = threadTotals.completed
+  const totalThreads = threadTotalsAll.total
+  const completedThreads = threadTotalsAll.completed
   const finishedPct = totalThreads && totalThreads > 0 && completedThreads != null ? (completedThreads / totalThreads) * 100 : 0
   const kpis = useMemo(() => {
     const avgRespS =
@@ -404,6 +433,17 @@ export function DashboardPage() {
                 const avgT = r.length > 0 ? (r.reduce((s, x) => s + (x.response_time ?? 0), 0) / r.length).toFixed(0) : '–'
                 const last = r.length > 0 ? relLang(r[0].created_at) : '–'
                 const showThreadStats = isQuoteAutomation(a)
+                const statusRaw = (a.status ?? 'Live').toString()
+                const isTesting = statusRaw.toLowerCase() === 'testing'
+                const statusLabel = isTesting ? 'Testing' : 'Live'
+                const statusClass = isTesting ? 'testing' : 'live'
+                const threadForAuto = threadTotalsByAuto?.[a.id]
+                const totalThreadsAuto = threadForAuto?.total ?? null
+                const completedThreadsAuto = threadForAuto?.completed ?? null
+                const finishedPctAuto =
+                  totalThreadsAuto != null && totalThreadsAuto > 0 && completedThreadsAuto != null
+                    ? (completedThreadsAuto / totalThreadsAuto) * 100
+                    : 0
 
                 const avgRespA = r.length > 0 ? r.reduce((s, x) => s + (x.response_time ?? 0), 0) / r.length : 0
                 const perfPct = avgRespA > 0 ? ((COST_ASSUMPTIONS.MANUAL_RESPONSE_S - avgRespA) / COST_ASSUMPTIONS.MANUAL_RESPONSE_S) * 100 : 0
@@ -462,7 +502,7 @@ export function DashboardPage() {
                   return last10DayKeys.map((k) => m[k] ?? 0)
                 })()
                 const savedMinsByDayL10D = repliesByDayL10D.map((cnt) => cnt * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN)
-                const customersByDayL10D = last10DayKeys.map((k) => (threadDayCounts?.[k] ?? 0))
+                const customersByDayL10D = last10DayKeys.map((k) => (threadDayCountsByAuto?.[a.id]?.[k] ?? 0))
                 const maxRepliesL10D = Math.max(...repliesByDayL10D, 1)
                 const maxSavedMinsL10D = Math.max(...savedMinsByDayL10D, 1)
                 const maxCustomersL10D = Math.max(...customersByDayL10D, 1)
@@ -501,8 +541,9 @@ export function DashboardPage() {
                     >
                       <div className="auto-name">
                         {displayAutomationName(a)}
-                        <span className="row-live">
-                          <span className="live-dot"></span>Live
+                        <span className={`row-live ${statusClass}`}>
+                          <span className={`live-dot ${statusClass}`}></span>
+                          {statusLabel}
                         </span>
                       </div>
                       <div className="auto-stat">
@@ -512,14 +553,14 @@ export function DashboardPage() {
                       {showThreadStats ? (
                         <div className="auto-stat">
                           <small>{t.totalConversations}</small>
-                          <span className="val">{totalThreads != null ? totalThreads : '–'}</span>
+                          <span className="val">{totalThreadsAuto != null ? totalThreadsAuto : '–'}</span>
                         </div>
                       ) : null}
                       {showThreadStats ? (
                         <div className="auto-stat good">
                           <small>{t.completed}</small>
                           <span className="val">
-                            {totalThreads != null && totalThreads > 0 ? `${finishedPct.toFixed(0)}%` : '–'}
+                            {totalThreadsAuto != null && totalThreadsAuto > 0 ? `${finishedPctAuto.toFixed(0)}%` : '–'}
                           </span>
                         </div>
                       ) : null}
