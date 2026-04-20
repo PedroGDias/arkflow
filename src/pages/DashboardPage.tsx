@@ -737,7 +737,7 @@ export function DashboardPage() {
       </main>
 
       <footer className="footer">
-        <div className="wrap">Powered by <a href="#">Arkflow</a> · We automate your manual work.</div>
+        <div className="wrap"><a href="#">Arkflow</a> · AI workers that do the work</div>
       </footer>
     </div>
   )
