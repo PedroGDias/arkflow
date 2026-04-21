@@ -15,6 +15,12 @@ function chevronSvg() {
   )
 }
 
+function fmtDurationS(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '–'
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  return fmtTime(seconds / 60)
+}
+
 export function DashboardPage() {
   const { signOut } = useAuth()
   const [loading, setLoading] = useState(true)
@@ -25,6 +31,10 @@ export function DashboardPage() {
   const [threadTotalsAll, setThreadTotalsAll] = useState<{ total: number | null; completed: number | null }>({ total: null, completed: null })
   const [threadTotalsByAuto, setThreadTotalsByAuto] = useState<Record<number, { total: number; completed: number }> | null>(null)
   const [threadDayCountsByAuto, setThreadDayCountsByAuto] = useState<Record<number, Record<string, number>> | null>(null)
+  const [manualAuditByAuto, setManualAuditByAuto] = useState<
+    Record<string, { conversations: number; totalMsgs: number; avgRespS: number | null }> | null
+  >(null)
+  const [manualAuditOverallAvgRespS, setManualAuditOverallAvgRespS] = useState<number | null>(null)
 
   const [lang, setLang] = useState<'EN' | 'ES'>('EN')
 
@@ -40,7 +50,7 @@ export function DashboardPage() {
         clientDashboard: 'Client Dashboard',
         howCalculated: 'How are these calculated?',
         avgResponseTime: 'Avg Response Time',
-        vsManual5m: 'vs MANUAL 1h34m',
+        vsManual: 'vs MANUAL',
         timeSaved: '⏱ Time Saved',
         timeSavedHow: 'Total staff time recovered based on the agreed manual handling time per request (5 min), multiplied by total replies processed.',
         avgRespHow: "Average response time of the automation's messages in production, compared to a 5 minute manual baseline.",
@@ -73,7 +83,7 @@ export function DashboardPage() {
         clientDashboard: 'Panel de Cliente',
         howCalculated: '¿Cómo se calcula?',
         avgResponseTime: 'Tiempo medio de respuesta',
-        vsManual5m: 'vs MANUAL 1h34m',
+        vsManual: 'vs MANUAL',
         timeSaved: '⏱ Tiempo ahorrado',
         timeSavedHow:
           'Tiempo total recuperado según el tiempo manual acordado por solicitud (5 min), multiplicado por el total de respuestas procesadas.',
@@ -146,6 +156,8 @@ export function DashboardPage() {
         setThreadTotalsAll({ total: null, completed: null })
         setThreadTotalsByAuto(null)
         setThreadDayCountsByAuto(null)
+        setManualAuditByAuto(null)
+        setManualAuditOverallAvgRespS(null)
         setError('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.')
         return
       }
@@ -228,6 +240,91 @@ export function DashboardPage() {
         setThreadTotalsAll({ total: null, completed: null })
         setThreadTotalsByAuto(null)
         setThreadDayCountsByAuto(null)
+      }
+
+      // Manual baseline (sample) for quote-email threads.
+      // Table: audit_julia_quote_emails, 1 row = 1 conversation in the sample.
+      // We compute:
+      // - conversations: row count
+      // - totalMsgs: sum(row.nr_msgs)
+      // - avgRespS: weighted average of row response time per message, weighted by nr_msgs
+      try {
+        const res = await sb.from('audit_julia_quote_emails').select('automation_id,nr_msgs,avg_resp_time').limit(100000)
+        if (res.error) throw res.error
+
+        const rows = (res.data ?? []) as Array<Record<string, unknown>>
+          const getNumber = (row: Record<string, unknown>, keys: string[]) => {
+            for (const k of keys) {
+              const v = row[k]
+              if (typeof v === 'number' && Number.isFinite(v)) return v
+              if (typeof v === 'string') {
+                const n = Number(v)
+                if (Number.isFinite(n)) return n
+              }
+            }
+            return null
+          }
+
+          const msgKeys = ['nr_msgs', 'nr_messages', 'num_msgs', 'msgs', 'msg_count', 'message_count', 'messages', 'total_msgs']
+          const respKeys = [
+            // preferred explicit seconds
+            'response_time_s',
+            'avg_response_time_s',
+            'response_time_seconds',
+            'avg_response_seconds',
+            // common generic names
+            'response_time',
+            'avg_response_time',
+            // your audit table column
+            'avg_resp_time',
+            // "per message" naming variants
+            'response_time_per_msg_s',
+            'response_time_per_message_s',
+            'avg_response_time_per_msg_s',
+            'avg_response_time_per_message_s',
+            'response_time_per_msg',
+            'response_time_per_message',
+            'avg_response_time_per_msg',
+            'avg_response_time_per_message',
+          ]
+
+          const by: Record<string, { conversations: number; totalMsgs: number; respWeightedSum: number; respWeight: number }> = {}
+          let overallWeightedSum = 0
+          let overallWeight = 0
+          for (const row of rows) {
+            const aidRaw = row['automation_id']
+            const aid =
+              typeof aidRaw === 'number' || typeof aidRaw === 'string'
+                ? String(aidRaw)
+                : null
+            if (!aid) continue
+
+            const msgs = getNumber(row, msgKeys) ?? 0
+            const resp = getNumber(row, respKeys)
+
+            by[aid] ??= { conversations: 0, totalMsgs: 0, respWeightedSum: 0, respWeight: 0 }
+            by[aid].conversations += 1
+            by[aid].totalMsgs += msgs
+
+            if (resp != null && msgs > 0) {
+              by[aid].respWeightedSum += resp * msgs
+              by[aid].respWeight += msgs
+
+              overallWeightedSum += resp * msgs
+              overallWeight += msgs
+            }
+          }
+
+          const out: Record<string, { conversations: number; totalMsgs: number; avgRespS: number | null }> = {}
+          for (const [aidStr, v] of Object.entries(by)) {
+            const avgRespS = v.respWeight > 0 ? v.respWeightedSum / v.respWeight : null
+            out[aidStr] = { conversations: v.conversations, totalMsgs: v.totalMsgs, avgRespS }
+          }
+          setManualAuditByAuto(out)
+          setManualAuditOverallAvgRespS(overallWeight > 0 ? overallWeightedSum / overallWeight : null)
+      } catch {
+        setManualAuditByAuto(null)
+        setManualAuditOverallAvgRespS(null)
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
@@ -358,7 +455,10 @@ export function DashboardPage() {
                 {kpis.avgRespS > 0 ? `${kpis.avgRespS.toFixed(0)}s` : '–'}
               </div>
               <div className="kpi-lbl">
-                {t.avgResponseTime} <span style={{ color: 'var(--text4)' }}>({t.vsManual5m})</span>
+                {t.avgResponseTime}{' '}
+                <span style={{ color: 'var(--text4)' }}>
+                  ({t.vsManual} {manualAuditOverallAvgRespS != null ? fmtDurationS(manualAuditOverallAvgRespS) : '–'})
+                </span>
               </div>
             </div>
             <div className="kpi">
@@ -517,6 +617,7 @@ export function DashboardPage() {
                 const maxHourAvg = Math.max(...hourAvgs, 1)
 
                 const isOpen = openIds.has(a.id)
+                const manual = manualAuditByAuto?.[String(a.id)] ?? null
 
                 return (
                   <div
@@ -586,6 +687,36 @@ export function DashboardPage() {
                     </div>
 
                     <div className="auto-detail">
+                      <div className="detail-strip">
+                        <div className="strip-head">{lang === 'ES' ? 'Manual (muestra)' : 'Manual (sample)'}</div>
+                        <div className="strip-nums volume-three">
+                          <div className="strip-num">
+                            <div className="sn-lbl">{lang === 'ES' ? 'Conversaciones' : 'Conversations'}</div>
+                            <div className={`sn-val ${manualAuditByAuto === null ? 'dim' : ''}`}>
+                              {manual ? manual.conversations : manualAuditByAuto === null ? '–' : '0'}
+                            </div>
+                          </div>
+                          <div className="strip-num">
+                            <div className="sn-lbl">{lang === 'ES' ? 'Mensajes totales' : 'Total msgs'}</div>
+                            <div className={`sn-val ${manualAuditByAuto === null ? 'dim' : ''}`}>
+                              {manual ? manual.totalMsgs : manualAuditByAuto === null ? '–' : '0'}
+                            </div>
+                          </div>
+                          <div className="strip-num">
+                            <div className="sn-lbl">{lang === 'ES' ? 'Tiempo medio (pond.)' : 'Avg response (weighted)'}</div>
+                            <div className={`sn-val ${manualAuditByAuto === null ? 'dim' : ''}`}>
+                              {manual
+                                ? manual.avgRespS != null
+                                  ? fmtDurationS(manual.avgRespS)
+                                  : '–'
+                                : manualAuditByAuto === null
+                                  ? '–'
+                                  : '–'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
                       <div className="detail-strip">
                         <div className="strip-head">{t.volume}</div>
                         <div className="strip-nums volume-four">
