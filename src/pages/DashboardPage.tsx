@@ -1030,7 +1030,9 @@ export function DashboardPage() {
                         {lang === 'ES' ? 'Auditoría - Oportunidades de automatización' : 'Audit - Opportunities for Automation'}
                       </div>
                       <div className="team-member-role">
-                        {lang === 'ES' ? 'Automatizaciones en discovery (candidatas)' : 'Automations in discovery (candidates)'}
+                        {lang === 'ES'
+                          ? 'Automatizaciones en discovery (candidatas) · basado en 5 semanas de datos'
+                          : 'Automations in discovery (candidates) · based on 5 weeks of data'}
                       </div>
                     </div>
                     <div className="team-stat">
