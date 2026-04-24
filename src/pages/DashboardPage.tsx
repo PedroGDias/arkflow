@@ -37,6 +37,24 @@ function fmtDurationS(seconds: number) {
   return fmtTime(seconds / 60)
 }
 
+function statusLower(a: Pick<Automation, 'status'>) {
+  return (a.status ?? 'Live').toString().trim().toLowerCase()
+}
+
+function readMetricNumber(row: unknown, keys: string[]) {
+  if (row == null || typeof row !== 'object') return null
+  const rec = row as Record<string, unknown>
+  for (const k of keys) {
+    const v = rec[k]
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (typeof v === 'string' && v.length) {
+      const n = Number(v)
+      if (Number.isFinite(n)) return n
+    }
+  }
+  return null
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 export function DashboardPage() {
   const { signOut } = useAuth()
@@ -82,6 +100,7 @@ export function DashboardPage() {
   // accordion: open team members (outer level) — Carla open by default
   const [openTeamIds, setOpenTeamIds] = useState<Set<string>>(() => new Set(['carla']))
   const [howOpen, setHowOpen] = useState(false)
+  const [auditOpen, setAuditOpen] = useState(true)
 
   const rowEls = useRef(new Map<number, HTMLDivElement>())
   const prevOpenIds = useRef<Set<number>>(new Set())
@@ -340,7 +359,12 @@ export function DashboardPage() {
 
   // Assign automations to team members; remainder goes to "unassigned"
   const assignedIds = new Set(TEAM_MEMBERS.flatMap((m) => m.automationIds))
-  const unassignedAutos = Object.values(byAuto).filter((a) => !assignedIds.has(a.id))
+  const discoveryAutos = useMemo(() => {
+    const rows = autos.filter((a) => statusLower(a) === 'discovery')
+    return rows.sort((a, b) => displayAutomationName(a).localeCompare(displayAutomationName(b), undefined, { sensitivity: 'base' }))
+  }, [autos, lang])
+  const discoveryIds = useMemo(() => new Set(discoveryAutos.map((a) => a.id)), [discoveryAutos])
+  const unassignedAutos = Object.values(byAuto).filter((a) => !assignedIds.has(a.id) && !discoveryIds.has(a.id) && statusLower(a) !== 'discovery')
   const missingAssignedIds = useMemo(() => {
     if (loading) return []
     const present = new Set(autos.map((a) => a.id))
@@ -670,9 +694,84 @@ export function DashboardPage() {
     )
   }
 
+  function renderAuditRow(a: Automation) {
+    const manualSample = coerceFiniteNumber(a.manual_sample_size)
+    const manualAvg = coerceFiniteNumber(a.manual_avg_response_time)
+
+    // Manual performance metrics (columns live on `automations`, names may vary)
+    const totalThreads =
+      readMetricNumber(a, ['manual_threads', 'manual_total_threads', 'manual_total_conversations', 'manual_nr_conversations', 'manual_nr_threads']) ??
+      readMetricNumber(a, ['nr_conversations', 'nr_threads', 'total_threads', 'total_conversations'])
+    const completedThreads =
+      readMetricNumber(a, ['manual_completed', 'manual_completed_threads', 'manual_completed_conversations', 'completed_threads', 'completed_conversations']) ??
+      readMetricNumber(a, ['completed'])
+    const hangingThreads =
+      readMetricNumber(a, ['manual_hanging', 'manual_hanging_threads', 'manual_hanging_conversations', 'hanging_threads', 'hanging_conversations']) ??
+      readMetricNumber(a, ['hanging'])
+    const avgTimeToCompleteS = readMetricNumber(a, [
+      'manual_avg_time_to_complete_s',
+      'manual_avg_time_to_complete',
+      'manual_avg_time_to_complete_seconds',
+      'avg_time_to_complete_s',
+      'avg_time_to_complete',
+      'avg_time_to_complete_seconds',
+    ])
+
+    const completionPct =
+      totalThreads != null && totalThreads > 0 && completedThreads != null ? (completedThreads / totalThreads) * 100 : null
+    const hangingPct =
+      totalThreads != null && totalThreads > 0 && hangingThreads != null ? (hangingThreads / totalThreads) * 100 : null
+
+    const st = statusLower(a)
+    const isDiscovery = st === 'discovery'
+    const statusLabel = isDiscovery ? (lang === 'ES' ? 'Discovery' : 'Discovery') : (a.status ?? '—').toString()
+    const statusClass = isDiscovery ? 'discovery' : 'offline'
+
+    return (
+      <div key={a.id} className="auto-row" data-auto-id={a.id}>
+        <div className="auto-summary audit-summary" style={{ cursor: 'default' }}>
+          <div className="auto-name">
+            {displayAutomationName(a)}
+            <span className={`row-live ${statusClass}`}>
+              <span className={`live-dot ${statusClass}`}></span>
+              {statusLabel}
+            </span>
+          </div>
+
+          <div className="auto-stat audit-stat">
+            <small>{lang === 'ES' ? 'Muestra (msgs)' : 'Sample (msgs)'}</small>
+            <span className="val">{manualSample != null ? manualSample : '–'}</span>
+          </div>
+          <div className="auto-stat audit-stat hl">
+            <small>{lang === 'ES' ? 'Resp. media (manual)' : 'Avg resp (manual)'}</small>
+            <span className="val">{manualAvg != null ? fmtDurationS(manualAvg) : '–'}</span>
+          </div>
+          <div className="auto-stat audit-stat">
+            <small>{lang === 'ES' ? 'Hilos' : 'Threads'}</small>
+            <span className="val">{totalThreads != null ? Math.round(totalThreads) : '–'}</span>
+          </div>
+          <div className="auto-stat audit-stat good">
+            <small>{lang === 'ES' ? 'Completadas' : 'Completed'}</small>
+            <span className="val">
+              {completionPct != null ? `${completionPct.toFixed(0)}%` : '–'}
+            </span>
+          </div>
+          <div className="auto-stat audit-stat">
+            <small>{lang === 'ES' ? 'Hanging' : 'Hanging'}</small>
+            <span className="val">{hangingPct != null ? `${hangingPct.toFixed(0)}%` : '–'}</span>
+          </div>
+          <div className="auto-stat audit-stat hl">
+            <small>{lang === 'ES' ? 'Tiempo para cerrar' : 'Avg time to close'}</small>
+            <span className="val">{avgTimeToCompleteS != null ? fmtDurationS(avgTimeToCompleteS) : '–'}</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // ── Team member header renderer ───────────────────────────────────────────
   function renderTeamMember(member: (typeof TEAM_MEMBERS)[number]) {
-    const memberAutos = member.automationIds.map((id) => byAuto[id]).filter(Boolean) as AutoWithRuns[]
+    const memberAutos = (member.automationIds.map((id) => byAuto[id]).filter(Boolean) as AutoWithRuns[]).filter((a) => statusLower(a) !== 'discovery')
     const memberRuns = memberAutos.flatMap((a) => a.runs)
     const totalReplies = memberRuns.length
     const avgRespS = totalReplies > 0 ? memberRuns.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalReplies : 0
@@ -902,13 +1001,6 @@ export function DashboardPage() {
 
       <main className="section">
         <div className="wrap">
-          <div className="section-head">
-            <div className="section-label">{t.yourTeam}</div>
-            <div className="section-count">
-              {TEAM_MEMBERS.length} {t.members}
-            </div>
-          </div>
-
           {error ? (
             <div className="error-msg">Failed to load. {error}</div>
           ) : !loading && autos.length === 0 && runs.length === 0 ? (
@@ -922,6 +1014,48 @@ export function DashboardPage() {
                   Missing automations in DB for this client: {missingAssignedIds.join(', ')}. Check you’re pointing at the expected Supabase project and RLS allows selecting `automations`.
                 </div>
               )}
+
+              {/* Audit — opportunities for automation (Discovery) */}
+              {!loading && discoveryAutos.length > 0 && (
+                <div className={`team-member audit-member ${auditOpen ? 'open' : ''}`}>
+                  <div className="team-member-header" onClick={() => setAuditOpen((v) => !v)}>
+                    <div
+                      className="team-member-avatar"
+                      style={{ background: 'var(--card)', color: 'var(--text3)' }}
+                    >
+                      A
+                    </div>
+                    <div className="team-member-info">
+                      <div className="team-member-name" style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text3)' }}>
+                        {lang === 'ES' ? 'Auditoría - Oportunidades de automatización' : 'Audit - Opportunities for Automation'}
+                      </div>
+                      <div className="team-member-role">
+                        {lang === 'ES' ? 'Automatizaciones en discovery (candidatas)' : 'Automations in discovery (candidates)'}
+                      </div>
+                    </div>
+                    <div className="team-stat">
+                      <span className="ts-val">{discoveryAutos.length}</span>
+                      <small>{lang === 'ES' ? 'Oportunidades' : 'Opportunities'}</small>
+                    </div>
+                    {chevronSvg()}
+                  </div>
+                  <div className="team-member-body">
+                    <div className="team-member-skills">
+                      <div className="auto-list">
+                        {discoveryAutos.map((a) => renderAuditRow(a))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="section-head">
+                <div className="section-label">{t.yourTeam}</div>
+                <div className="section-count">
+                  {TEAM_MEMBERS.length} {t.members}
+                </div>
+              </div>
+
               {TEAM_MEMBERS.map((member) => renderTeamMember(member))}
               {/* Unassigned automations catch-all */}
               {!loading && unassignedAutos.length > 0 && (

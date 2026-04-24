@@ -9,6 +9,10 @@ import '../styles/dashboard.css'
 type SkillStatus = { live: number; testing: number; offline: number }
 type WorkerStatus = { active: number; inactive: number }
 
+function statusLower(status: unknown) {
+  return (status ?? '').toString().trim().toLowerCase()
+}
+
 const CLIENTS = [
   {
     id: env.clientId,
@@ -38,15 +42,16 @@ export function ClientPickerPage() {
           .select('id, status')
           .eq('client_id', c.id)
         const rows = (data ?? []) as Array<{ id: number; status: string | null }>
-        const live = rows.filter((r) => (r.status ?? 'Live').toLowerCase() === 'live').length
-        const testing = rows.filter((r) => (r.status ?? '').toLowerCase() === 'testing').length
-        const offline = rows.length - live - testing
+        const nonDiscovery = rows.filter((r) => statusLower(r.status ?? 'Live') !== 'discovery')
+        const live = nonDiscovery.filter((r) => statusLower(r.status ?? 'Live') === 'live').length
+        const testing = nonDiscovery.filter((r) => statusLower(r.status ?? '') === 'testing').length
+        const offline = nonDiscovery.length - live - testing
 
-        const byId = new Map(rows.map((r) => [r.id, (r.status ?? '').toString().toLowerCase()]))
+        const byId = new Map(rows.map((r) => [r.id, statusLower(r.status ?? '')]))
         const active = TEAM_MEMBERS.filter((m) => {
           if (m.automationIds.length === 0) return false
           const st = m.automationIds.map((aid) => byId.get(aid) ?? '')
-          return st.some((s) => s === 'live' || s === 'testing')
+          return st.some((s) => (s === 'live' || s === 'testing') && s !== 'discovery')
         }).length
         const inactive = TEAM_MEMBERS.length - active
 

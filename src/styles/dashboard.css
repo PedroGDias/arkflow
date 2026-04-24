@@ -13,6 +13,8 @@
   --green-bg: #e4f2e8;
   --yellow: #9a6a00;
   --yellow-bg: #fff2cf;
+  --blue: #2a5ab3;
+  --blue-bg: #e8eef8;
   --red: #b33a2a;
   --red-bg: #f5e6e3;
   --radius: 8px;
@@ -146,6 +148,7 @@ body {
   cursor: pointer; user-select: none; transition: background .15s;
 }
 .auto-summary:hover { background: var(--bg); }
+.auto-summary.audit-summary { gap: 28px; }
 .auto-name {
   font-family: var(--serif); font-weight: 400; font-size: 17px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -159,12 +162,15 @@ body {
 }
 .row-live.testing { color: var(--yellow); background: var(--yellow-bg); }
 .row-live.testing .live-dot { background: var(--yellow); }
+.row-live.discovery { color: var(--blue); background: var(--blue-bg); }
+.row-live.discovery .live-dot { background: var(--blue); }
 .auto-stat {
   font-family: var(--mono); font-size: 15px; color: var(--text2);
   display: flex; flex-direction: column; align-items: center;
   flex-shrink: 0; white-space: nowrap; gap: 3px;
   width: 80px;
 }
+.auto-stat.audit-stat { width: 112px; }
 .auto-stat small {
   font-size: 10px; color: var(--text4);
   text-transform: uppercase; letter-spacing: 0.06em; line-height: 1;
@@ -436,6 +442,15 @@ body {
   transition: background .15s;
 }
 .team-member-header:hover { background: var(--bg); }
+.team-member.audit-member > .team-member-header {
+  background: var(--black);
+}
+.team-member.audit-member > .team-member-header:hover { background: var(--black); }
+.team-member.audit-member > .team-member-header .team-member-name { color: var(--white) !important; }
+.team-member.audit-member > .team-member-header .team-member-role { color: rgba(255,255,255,0.55); }
+.team-member.audit-member > .team-member-header .team-stat .ts-val { color: var(--white); }
+.team-member.audit-member > .team-member-header .team-stat small { color: rgba(255,255,255,0.55); }
+.team-member.audit-member > .team-member-header .chevron { color: rgba(255,255,255,0.55); }
 .team-member-avatar {
   width: 38px;
   height: 38px;
