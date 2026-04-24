@@ -27,6 +27,12 @@ function chevronSvg() {
 
 function fmtDurationS(seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) return '–'
+  if (seconds >= 24 * 60 * 60) {
+    const totalHours = Math.round(seconds / 3600)
+    const d = Math.floor(totalHours / 24)
+    const h = totalHours % 24
+    return h > 0 ? `${d}d ${h}h` : `${d}d`
+  }
   if (seconds < 60) return `${Math.round(seconds)}s`
   return fmtTime(seconds / 60)
 }
@@ -46,10 +52,28 @@ export function DashboardPage() {
   const [threadTotalsAll, setThreadTotalsAll] = useState<{ total: number | null; completed: number | null }>({ total: null, completed: null })
   const [threadTotalsByAuto, setThreadTotalsByAuto] = useState<Record<number, { total: number; completed: number }> | null>(null)
   const [threadDayCountsByAuto, setThreadDayCountsByAuto] = useState<Record<number, Record<string, number>> | null>(null)
-  const [manualAuditByAuto, setManualAuditByAuto] = useState<
-    Record<string, { conversations: number; totalMsgs: number; avgRespS: number | null }> | null
-  >(null)
-  const [manualAuditOverallAvgRespS, setManualAuditOverallAvgRespS] = useState<number | null>(null)
+
+  const coerceFiniteNumber = (v: unknown): number | null => {
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (typeof v === 'string' && v.length) {
+      const n = Number(v)
+      if (Number.isFinite(n)) return n
+    }
+    return null
+  }
+
+  const manualOverallAvgRespS = useMemo(() => {
+    const rows = autos
+      .map((a) => ({
+        n: coerceFiniteNumber(a.manual_sample_size) ?? 0,
+        avg: coerceFiniteNumber(a.manual_avg_response_time),
+      }))
+      .filter((r) => r.n > 0 && r.avg != null)
+    const denom = rows.reduce((s, r) => s + r.n, 0)
+    if (denom <= 0) return null
+    const numer = rows.reduce((s, r) => s + r.n * (r.avg ?? 0), 0)
+    return numer / denom
+  }, [autos])
 
   const [lang, setLang] = useState<'EN' | 'ES'>('EN')
 
@@ -186,14 +210,15 @@ export function DashboardPage() {
         setThreadTotalsAll({ total: null, completed: null })
         setThreadTotalsByAuto(null)
         setThreadDayCountsByAuto(null)
-        setManualAuditByAuto(null)
-        setManualAuditOverallAvgRespS(null)
         setError('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.')
         return
       }
       const sb = supabase
       const [aRes, rRes] = await Promise.all([
-        sb.from('automations').select('*').eq('client_id', cid),
+        sb
+          .from('automations')
+          .select('*,manual_sample_size,manual_avg_response_time')
+          .eq('client_id', cid),
         sb
           .from('runs')
           .select('*,automations!inner(client_id)')
@@ -263,60 +288,6 @@ export function DashboardPage() {
         setThreadTotalsByAuto(null)
         setThreadDayCountsByAuto(null)
       }
-
-      try {
-        const res = await sb.from('audit_julia_quote_emails').select('automation_id,nr_msgs,avg_resp_time').limit(100000)
-        if (res.error) throw res.error
-        const rows = (res.data ?? []) as Array<Record<string, unknown>>
-        const getNumber = (row: Record<string, unknown>, keys: string[]) => {
-          for (const k of keys) {
-            const v = row[k]
-            if (typeof v === 'number' && Number.isFinite(v)) return v
-            if (typeof v === 'string') {
-              const n = Number(v)
-              if (Number.isFinite(n)) return n
-            }
-          }
-          return null
-        }
-        const msgKeys = ['nr_msgs', 'nr_messages', 'num_msgs', 'msgs', 'msg_count', 'message_count', 'messages', 'total_msgs']
-        const respKeys = [
-          'response_time_s', 'avg_response_time_s', 'response_time_seconds', 'avg_response_seconds',
-          'response_time', 'avg_response_time', 'avg_resp_time',
-          'response_time_per_msg_s', 'response_time_per_message_s', 'avg_response_time_per_msg_s',
-          'avg_response_time_per_message_s', 'response_time_per_msg', 'response_time_per_message',
-          'avg_response_time_per_msg', 'avg_response_time_per_message',
-        ]
-        const by: Record<string, { conversations: number; totalMsgs: number; respWeightedSum: number; respWeight: number }> = {}
-        let overallWeightedSum = 0
-        let overallWeight = 0
-        for (const row of rows) {
-          const aidRaw = row['automation_id']
-          const aid = typeof aidRaw === 'number' || typeof aidRaw === 'string' ? String(aidRaw) : null
-          if (!aid) continue
-          const msgs = getNumber(row, msgKeys) ?? 0
-          const resp = getNumber(row, respKeys)
-          by[aid] ??= { conversations: 0, totalMsgs: 0, respWeightedSum: 0, respWeight: 0 }
-          by[aid].conversations += 1
-          by[aid].totalMsgs += msgs
-          if (resp != null && msgs > 0) {
-            by[aid].respWeightedSum += resp * msgs
-            by[aid].respWeight += msgs
-            overallWeightedSum += resp * msgs
-            overallWeight += msgs
-          }
-        }
-        const out: Record<string, { conversations: number; totalMsgs: number; avgRespS: number | null }> = {}
-        for (const [aidStr, v] of Object.entries(by)) {
-          const avgRespS = v.respWeight > 0 ? v.respWeightedSum / v.respWeight : null
-          out[aidStr] = { conversations: v.conversations, totalMsgs: v.totalMsgs, avgRespS }
-        }
-        setManualAuditByAuto(out)
-        setManualAuditOverallAvgRespS(overallWeight > 0 ? overallWeightedSum / overallWeight : null)
-      } catch {
-        setManualAuditByAuto(null)
-        setManualAuditOverallAvgRespS(null)
-      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load')
     } finally {
@@ -370,6 +341,11 @@ export function DashboardPage() {
   // Assign automations to team members; remainder goes to "unassigned"
   const assignedIds = new Set(TEAM_MEMBERS.flatMap((m) => m.automationIds))
   const unassignedAutos = Object.values(byAuto).filter((a) => !assignedIds.has(a.id))
+  const missingAssignedIds = useMemo(() => {
+    if (loading) return []
+    const present = new Set(autos.map((a) => a.id))
+    return Array.from(assignedIds).filter((id) => !present.has(id)).sort((a, b) => a - b)
+  }, [assignedIds, autos, loading])
 
   // ── Skill row renderer ────────────────────────────────────────────────────
   function renderSkillRow(a: AutoWithRuns) {
@@ -378,9 +354,11 @@ export function DashboardPage() {
     const last = r.length > 0 ? relLang(r[0].created_at) : '–'
     const showThreadStats = isQuoteAutomation(a)
     const statusRaw = (a.status ?? 'Live').toString()
-    const isTesting = statusRaw.toLowerCase() === 'testing'
-    const statusLabel = isTesting ? t.testingStatus : t.activeStatus
-    const statusClass = isTesting ? 'testing' : 'live'
+    const statusLower = statusRaw.toLowerCase()
+    const isLive = statusLower === 'live'
+    const isTesting = statusLower === 'testing'
+    const statusLabel = isLive ? t.activeStatus : isTesting ? t.testingStatus : t.inactiveStatus
+    const statusClass = isLive ? 'live' : isTesting ? 'testing' : 'offline'
     const threadForAuto = threadTotalsByAuto?.[a.id]
     const totalThreadsAuto = threadForAuto?.total ?? null
     const completedThreadsAuto = threadForAuto?.completed ?? null
@@ -461,7 +439,8 @@ export function DashboardPage() {
     const maxHourAvg = Math.max(...hourAvgs, 1)
 
     const isOpen = openIds.has(a.id)
-    const manual = manualAuditByAuto?.[String(a.id)] ?? null
+    const manualSample = coerceFiniteNumber(a.manual_sample_size)
+    const manualAvg = coerceFiniteNumber(a.manual_avg_response_time)
 
     return (
       <div
@@ -536,14 +515,9 @@ export function DashboardPage() {
             </span>
             <span className="benchmark-callout-vals">
               <span className="benchmark-callout-val">
-                {manual ? manual.conversations : manualAuditByAuto === null ? '–' : '0'}
+                {manualSample != null ? manualSample : '–'}
               </span>
-              {' '}{lang === 'ES' ? 'conv.' : 'conv.'}{' '}
-              <span className="benchmark-callout-sep">·</span>{' '}
-              <span className="benchmark-callout-val">
-                {manual ? manual.totalMsgs : manualAuditByAuto === null ? '–' : '0'}
-              </span>
-              {' '}msgs{' '}
+              {' '}{lang === 'ES' ? 'msgs' : 'msgs'}{' '}
               <span className="benchmark-callout-note">
                 ({lang === 'ES' ? 'muestra' : 'sample'})
               </span>
@@ -551,11 +525,7 @@ export function DashboardPage() {
               <span className="benchmark-callout-sep">·</span>{' '}
               {lang === 'ES' ? 'media ' : 'avg '}
               <span className="benchmark-callout-val">
-                {manual
-                  ? manual.avgRespS != null
-                    ? fmtDurationS(manual.avgRespS)
-                    : '–'
-                  : '–'}
+                {manualAvg != null ? fmtDurationS(manualAvg) : '–'}
               </span>
             </span>
           </div>
@@ -880,7 +850,7 @@ export function DashboardPage() {
               <div className="kpi-lbl">
                 {t.avgResponseTime}{' '}
                 <span style={{ color: 'var(--text4)' }}>
-                  ({t.vsManual} {manualAuditOverallAvgRespS != null ? fmtDurationS(manualAuditOverallAvgRespS) : '–'})
+                  ({t.vsManual} {manualOverallAvgRespS != null ? fmtDurationS(manualOverallAvgRespS) : '–'})
                 </span>
               </div>
             </div>
@@ -947,6 +917,11 @@ export function DashboardPage() {
             </div>
           ) : (
             <div className="team-list">
+              {!loading && missingAssignedIds.length > 0 && (
+                <div className="error-msg" style={{ background: 'var(--red-bg)', color: 'var(--red)' }}>
+                  Missing automations in DB for this client: {missingAssignedIds.join(', ')}. Check you’re pointing at the expected Supabase project and RLS allows selecting `automations`.
+                </div>
+              )}
               {TEAM_MEMBERS.map((member) => renderTeamMember(member))}
               {/* Unassigned automations catch-all */}
               {!loading && unassignedAutos.length > 0 && (

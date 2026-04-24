@@ -7,6 +7,7 @@ import { TEAM_MEMBERS } from '../lib/team'
 import '../styles/dashboard.css'
 
 type SkillStatus = { live: number; testing: number; offline: number }
+type WorkerStatus = { active: number; inactive: number }
 
 const CLIENTS = [
   {
@@ -22,11 +23,9 @@ export function ClientPickerPage() {
   const navigate = useNavigate()
   const [lang, setLang] = useState<'EN' | 'ES'>('EN')
 
-  const activeWorkers = TEAM_MEMBERS.filter((m) => m.automationIds.length > 0).length
-  const inactiveWorkers = TEAM_MEMBERS.length - activeWorkers
-
   // Skill status per client id
   const [skillStatus, setSkillStatus] = useState<Record<number, SkillStatus>>({})
+  const [workerStatus, setWorkerStatus] = useState<Record<number, WorkerStatus>>({})
 
   useEffect(() => {
     if (!supabase) return
@@ -42,12 +41,26 @@ export function ClientPickerPage() {
         const live = rows.filter((r) => (r.status ?? 'Live').toLowerCase() === 'live').length
         const testing = rows.filter((r) => (r.status ?? '').toLowerCase() === 'testing').length
         const offline = rows.length - live - testing
-        return { id: c.id, status: { live, testing, offline } }
+
+        const byId = new Map(rows.map((r) => [r.id, (r.status ?? '').toString().toLowerCase()]))
+        const active = TEAM_MEMBERS.filter((m) => {
+          if (m.automationIds.length === 0) return false
+          const st = m.automationIds.map((aid) => byId.get(aid) ?? '')
+          return st.some((s) => s === 'live' || s === 'testing')
+        }).length
+        const inactive = TEAM_MEMBERS.length - active
+
+        return { id: c.id, skill: { live, testing, offline }, workers: { active, inactive } }
       }),
     ).then((results) => {
       const map: Record<number, SkillStatus> = {}
-      for (const r of results) map[r.id] = r.status
+      const wmap: Record<number, WorkerStatus> = {}
+      for (const r of results) {
+        map[r.id] = r.skill
+        wmap[r.id] = r.workers
+      }
       setSkillStatus(map)
+      setWorkerStatus(wmap)
     })
   }, [])
 
@@ -127,6 +140,7 @@ export function ClientPickerPage() {
           <div className="client-grid">
             {CLIENTS.map((c) => {
               const ss = skillStatus[c.id]
+              const ws = workerStatus[c.id]
               return (
                 <button
                   key={c.id}
@@ -144,18 +158,19 @@ export function ClientPickerPage() {
                     <div className="client-card-meta-row">
                       <span className="client-card-meta-label">Workers</span>
                       <span className="client-card-meta-pills">
-                        {activeWorkers > 0 && (
+                        {ws != null && ws.active > 0 && (
                           <span className="row-live live">
                             <span className="live-dot live" />
-                            {activeWorkers} {lang === 'EN' ? 'active' : 'activos'}
+                            {ws.active} {lang === 'EN' ? 'active' : 'activos'}
                           </span>
                         )}
-                        {inactiveWorkers > 0 && (
+                        {ws != null && ws.inactive > 0 && (
                           <span className="row-live offline">
                             <span className="live-dot offline" />
-                            {inactiveWorkers} {lang === 'EN' ? 'inactive' : 'inactivos'}
+                            {ws.inactive} {lang === 'EN' ? 'inactive' : 'inactivos'}
                           </span>
                         )}
+                        {ws == null && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text4)' }}>–</span>}
                       </span>
                     </div>
 

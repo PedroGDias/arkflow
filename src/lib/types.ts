@@ -8,6 +8,8 @@ export type Automation = {
   automation_name_es?: string
   automation_name_local?: string
   status?: 'Live' | 'Testing' | string | null
+  manual_sample_size?: number | null
+  manual_avg_response_time?: number | null
 }
 
 export type Run = {
