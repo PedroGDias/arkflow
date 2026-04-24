@@ -38,7 +38,27 @@ function fmtDurationS(seconds: number) {
 }
 
 function statusLower(a: Pick<Automation, 'status'>) {
-  return (a.status ?? 'Live').toString().trim().toLowerCase()
+  return (a.status ?? '').toString().trim().toLowerCase()
+}
+
+function isDiscoveryAutomation(a: Pick<Automation, 'status'>) {
+  const s = statusLower(a)
+  // Production can contain variants like "Discovery", "In discovery", etc.
+  return s.includes('discovery')
+}
+
+function readMetricIntegerString(row: unknown, keys: string[]) {
+  if (row == null || typeof row !== 'object') return null
+  const rec = row as Record<string, unknown>
+  for (const k of keys) {
+    const v = rec[k]
+    if (typeof v === 'number' && Number.isFinite(v)) return String(Math.trunc(v))
+    if (typeof v === 'string' && v.length) {
+      const s = v.trim()
+      if (/^-?\d+$/.test(s)) return s
+    }
+  }
+  return null
 }
 
 function readMetricNumber(row: unknown, keys: string[]) {
@@ -360,11 +380,11 @@ export function DashboardPage() {
   // Assign automations to team members; remainder goes to "unassigned"
   const assignedIds = new Set(TEAM_MEMBERS.flatMap((m) => m.automationIds))
   const discoveryAutos = useMemo(() => {
-    const rows = autos.filter((a) => statusLower(a) === 'discovery')
+    const rows = autos.filter((a) => isDiscoveryAutomation(a))
     return rows.sort((a, b) => displayAutomationName(a).localeCompare(displayAutomationName(b), undefined, { sensitivity: 'base' }))
   }, [autos, lang])
   const discoveryIds = useMemo(() => new Set(discoveryAutos.map((a) => a.id)), [discoveryAutos])
-  const unassignedAutos = Object.values(byAuto).filter((a) => !assignedIds.has(a.id) && !discoveryIds.has(a.id) && statusLower(a) !== 'discovery')
+  const unassignedAutos = Object.values(byAuto).filter((a) => !assignedIds.has(a.id) && !discoveryIds.has(a.id) && !isDiscoveryAutomation(a))
   const missingAssignedIds = useMemo(() => {
     if (loading) return []
     const present = new Set(autos.map((a) => a.id))
@@ -695,7 +715,7 @@ export function DashboardPage() {
   }
 
   function renderAuditRow(a: Automation) {
-    const manualSample = coerceFiniteNumber(a.manual_sample_size)
+    const manualSampleMsgs = readMetricIntegerString(a, ['manual_sample_size']) ?? (typeof a.manual_sample_size === 'number' ? String(Math.trunc(a.manual_sample_size)) : null)
     const manualAvg = coerceFiniteNumber(a.manual_avg_response_time)
 
     // Manual performance metrics (columns live on `automations`, names may vary)
@@ -722,8 +742,7 @@ export function DashboardPage() {
     const hangingPct =
       totalThreads != null && totalThreads > 0 && hangingThreads != null ? (hangingThreads / totalThreads) * 100 : null
 
-    const st = statusLower(a)
-    const isDiscovery = st === 'discovery'
+    const isDiscovery = isDiscoveryAutomation(a)
     const statusLabel = isDiscovery ? (lang === 'ES' ? 'Discovery' : 'Discovery') : (a.status ?? '—').toString()
     const statusClass = isDiscovery ? 'discovery' : 'offline'
 
@@ -740,7 +759,7 @@ export function DashboardPage() {
 
           <div className="auto-stat audit-stat">
             <small>{lang === 'ES' ? 'Muestra (msgs)' : 'Sample (msgs)'}</small>
-            <span className="val">{manualSample != null ? manualSample : '–'}</span>
+            <span className="val">{manualSampleMsgs != null ? manualSampleMsgs : '–'}</span>
           </div>
           <div className="auto-stat audit-stat hl">
             <small>{lang === 'ES' ? 'Resp. media (manual)' : 'Avg resp (manual)'}</small>
@@ -771,7 +790,7 @@ export function DashboardPage() {
 
   // ── Team member header renderer ───────────────────────────────────────────
   function renderTeamMember(member: (typeof TEAM_MEMBERS)[number]) {
-    const memberAutos = (member.automationIds.map((id) => byAuto[id]).filter(Boolean) as AutoWithRuns[]).filter((a) => statusLower(a) !== 'discovery')
+    const memberAutos = (member.automationIds.map((id) => byAuto[id]).filter(Boolean) as AutoWithRuns[]).filter((a) => !isDiscoveryAutomation(a))
     const memberRuns = memberAutos.flatMap((a) => a.runs)
     const totalReplies = memberRuns.length
     const avgRespS = totalReplies > 0 ? memberRuns.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalReplies : 0
