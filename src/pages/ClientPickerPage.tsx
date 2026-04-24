@@ -51,7 +51,8 @@ export function ClientPickerPage() {
         const active = TEAM_MEMBERS.filter((m) => {
           if (m.automationIds.length === 0) return false
           const st = m.automationIds.map((aid) => byId.get(aid) ?? '')
-          return st.some((s) => (s === 'live' || s === 'testing') && s !== 'discovery')
+          // Discovery is treated separately on the client dashboard (audit section), not as a worker "active" state.
+          return st.some((s) => s === 'live' || s === 'testing')
         }).length
         const inactive = TEAM_MEMBERS.length - active
 
