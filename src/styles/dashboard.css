@@ -437,8 +437,8 @@ body {
   font-family: var(--mono); font-size: 10px; text-transform: uppercase;
   letter-spacing: 0.08em; color: var(--text4); margin-bottom: 14px;
 }
-.mini-bars { display: flex; align-items: stretch; gap: 5px; height: 88px; }
-.mini-bar-g { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; min-height: 0; justify-content: flex-end; }
+.mini-bars { display: flex; align-items: stretch; gap: 5px; height: 88px; padding-top: 18px; }
+.mini-bar-g { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 0; justify-content: flex-end; }
 /* Bar height % must be relative to this track only (not the full column incl. labels). */
 .mini-bar-track {
   flex: 1 1 auto;
@@ -448,15 +448,16 @@ body {
   align-items: flex-end;
   justify-content: center;
 }
-.mini-bar { width: 100%; max-width: 36px; background: var(--brand); border-radius: 3px 3px 0 0; min-height: 0; transition: height .5s ease; }
+.mini-bar { position: relative; overflow: visible; width: 100%; max-width: 36px; background: var(--brand); border-radius: 3px 3px 0 0; min-height: 0; transition: height .5s ease; }
 .mini-bar:hover { opacity: .6; }
 .mini-bar.zero { background: transparent; }
-.mini-bar-v { font-family: var(--mono); font-size: 10px; color: var(--text3); }
+/* Value floats directly above the bar top */
+.mini-bar-v { position: absolute; bottom: 100%; left: 0; right: 0; text-align: center; padding-bottom: 2px; font-family: var(--mono); font-size: 10px; color: var(--text3); white-space: nowrap; }
 .mini-bar-lbl { font-family: var(--mono); font-size: 9px; color: var(--text4); text-align: center; white-space: nowrap; }
 
-.hour-bars { display: flex; align-items: stretch; gap: 2px; height: 72px; }
-.hour-bars.hour-bars-compact { height: 72px; }
-.hour-bar-g { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 0; justify-content: flex-end; }
+.hour-bars { display: flex; align-items: stretch; gap: 2px; height: 72px; padding-top: 14px; }
+.hour-bars.hour-bars-compact { height: 72px; padding-top: 14px; }
+.hour-bar-g { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; min-height: 0; justify-content: flex-end; }
 .hour-bar-track {
   flex: 1 1 auto;
   align-self: stretch;
@@ -465,10 +466,11 @@ body {
   align-items: flex-end;
   justify-content: center;
 }
-.hour-bar { width: 100%; background: var(--brand); border-radius: 2px 2px 0 0; min-height: 0; transition: height .4s ease; }
+.hour-bar { position: relative; overflow: visible; width: 100%; background: var(--brand); border-radius: 2px 2px 0 0; min-height: 0; transition: height .4s ease; }
 .hour-bar.zero { background: transparent; }
 .hour-bar:hover { opacity: .6; }
-.hour-bar-v { font-family: var(--mono); font-size: 8px; color: var(--text3); min-height: 11px; }
+/* Value floats directly above the hour bar top */
+.hour-bar-v { position: absolute; bottom: 100%; left: 0; right: 0; text-align: center; padding-bottom: 1px; font-family: var(--mono); font-size: 8px; color: var(--text3); white-space: nowrap; }
 .hour-lbl { font-family: var(--mono); font-size: 8px; color: var(--text4); text-align: center; min-height: 12px; }
 
 /* ── Footer ── */
@@ -826,20 +828,21 @@ body {
   color: var(--text);
 }
 
+/* ── Audit by-city card grid (discovery section) ── */
 .audit-city-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 10px;
 }
 .audit-city-card {
   border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg);
-  padding: 10px 10px;
+  border-radius: 10px;
+  background: var(--white);
+  padding: 10px 12px;
 }
 .audit-city-name {
   font-family: var(--serif);
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1.2;
   color: var(--text);
   margin-bottom: 8px;
@@ -847,20 +850,77 @@ body {
 .audit-city-metrics {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px 10px;
+  gap: 6px 10px;
 }
+.audit-city-metric {}
 .audit-city-lbl {
   font-family: var(--mono);
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.10em;
   color: var(--text4);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .audit-city-val {
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text);
+}
+
+/* ── Per-city accordion rows (inside a live group detail) ── */
+.city-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-top: 12px;
+}
+.city-row { background: var(--white); }
+.city-row-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s;
+}
+.city-row-summary:hover { background: var(--bg); }
+.city-row-name {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.city-row-summary .auto-stat { width: 72px; font-size: 13px; }
+.city-row-summary .auto-stat small { font-size: 9px; }
+.city-row-summary .chevron { color: var(--text4); transition: transform .2s; flex-shrink: 0; }
+.city-row.open .city-row-summary .chevron { transform: rotate(180deg); }
+
+.city-row-detail {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height .35s ease, padding .35s ease;
+  background: var(--bg);
+  padding: 0 16px;
+}
+.city-row.open .city-row-detail {
+  max-height: 400px;
+  padding: 14px 16px 16px;
+}
+.strip-charts.city-charts {
+  grid-template-columns: repeat(3, 1fr);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
 }
 .team-member-avatar {
   width: 38px;

@@ -232,10 +232,12 @@ export function DashboardPage() {
   const [openIds, setOpenIds] = useState<Set<number>>(() => new Set())
   // accordion: open live automation groups (task-level, inside a team member)
   const [openLiveGroupIds, setOpenLiveGroupIds] = useState<Set<string>>(() => new Set())
+  // accordion: open per-city rows inside a live group
+  const [openCityIds, setOpenCityIds] = useState<Set<number>>(() => new Set())
   // accordion: open team members (outer level) — Carla open by default
   const [openTeamIds, setOpenTeamIds] = useState<Set<string>>(() => new Set(['carla']))
   const [howOpen, setHowOpen] = useState(false)
-  const [auditOpen, setAuditOpen] = useState(true)
+  const [auditOpen, setAuditOpen] = useState(false)
   const [openAuditIds, setOpenAuditIds] = useState<Set<string>>(() => new Set())
 
   const rowEls = useRef(new Map<number, HTMLDivElement>())
@@ -337,6 +339,26 @@ export function DashboardPage() {
     } as const
     return dict[lang]
   }, [lang])
+
+  const last10DayKeys = useMemo(() => {
+    const keys: string[] = []
+    const today = new Date()
+    for (let i = 9; i >= 0; i--) {
+      const d = new Date(today)
+      d.setDate(today.getDate() - i)
+      keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
+    }
+    return keys
+  }, [])
+
+  const l10dLabels = useMemo(() => {
+    const locale = lang === 'ES' ? 'es-ES' : 'en-GB'
+    return last10DayKeys.map((k) => {
+      const [yy, mm, dd] = k.split('-').map((v) => Number(v))
+      const d = new Date(yy, (mm ?? 1) - 1, dd ?? 1, 12, 0, 0)
+      return d.toLocaleDateString(locale, { day: '2-digit', month: 'short' })
+    })
+  }, [lang, last10DayKeys])
 
   function relLang(iso: string) {
     if (lang === 'EN') return rel(iso)
@@ -794,23 +816,6 @@ export function DashboardPage() {
     const wdLabels = lang === 'ES' ? ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'] : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
     const maxWd = Math.max(...wdOrder.map((d) => wdCounts[d]), 1)
 
-    const last10DayKeys = (() => {
-      const keys: string[] = []
-      const today = new Date()
-      for (let i = 9; i >= 0; i--) {
-        const d = new Date(today)
-        d.setDate(today.getDate() - i)
-        keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
-      }
-      return keys
-    })()
-    const l10dLabels = last10DayKeys.map((k) => {
-      const [yy, mm, dd] = k.split('-').map((v) => Number(v))
-      const d = new Date(yy, (mm ?? 1) - 1, dd ?? 1, 12, 0, 0)
-      const locale = lang === 'ES' ? 'es-ES' : 'en-GB'
-      return d.toLocaleDateString(locale, { day: '2-digit', month: 'short' })
-    })
-
     const days: Record<string, { total: number; timeSum: number }> = {}
     for (const x of r) {
       const d = new Date(x.created_at)
@@ -1021,9 +1026,10 @@ export function DashboardPage() {
                     const pct = (cnt / maxRepliesL10D) * 100
                     return (
                       <div className="mini-bar-g" key={last10DayKeys[i]}>
-                        <div className="mini-bar-v">{cnt > 0 ? `${cnt}` : ''}</div>
                         <div className="mini-bar-track">
-                          <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                          <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                            <div className="mini-bar-v">{cnt > 0 ? `${cnt}` : ''}</div>
+                          </div>
                         </div>
                         <div className="mini-bar-lbl">{l10dLabels[i]}</div>
                       </div>
@@ -1038,9 +1044,10 @@ export function DashboardPage() {
                     const pct = (cnt / maxCustomersL10D) * 100
                     return (
                       <div className="mini-bar-g" key={last10DayKeys[i]}>
-                        <div className="mini-bar-v">{showThreadStats && cnt > 0 ? `${cnt}` : ''}</div>
                         <div className="mini-bar-track">
-                          <div className={`mini-bar ${!showThreadStats || cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                          <div className={`mini-bar ${!showThreadStats || cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                            <div className="mini-bar-v">{showThreadStats && cnt > 0 ? `${cnt}` : ''}</div>
+                          </div>
                         </div>
                         <div className="mini-bar-lbl">{l10dLabels[i]}</div>
                       </div>
@@ -1056,9 +1063,10 @@ export function DashboardPage() {
                     const dispPct = Math.round((cnt / hourTotal) * 100)
                     return (
                       <div className="hour-bar-g" key={h}>
-                        <div className="hour-bar-v">{cnt > 0 ? `${dispPct}%` : ''}</div>
                         <div className="hour-bar-track">
-                          <div className={`hour-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                          <div className={`hour-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                            <div className="hour-bar-v">{cnt > 0 ? `${dispPct}%` : ''}</div>
+                          </div>
                         </div>
                         <div className="hour-lbl">{`${h}h`}</div>
                       </div>
@@ -1075,9 +1083,10 @@ export function DashboardPage() {
                     const dispPct = Math.round((cnt / hourTotal) * 100)
                     return (
                       <div className="mini-bar-g" key={di}>
-                        <div className="mini-bar-v">{cnt > 0 ? `${dispPct}%` : ''}</div>
                         <div className="mini-bar-track">
-                          <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                          <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                            <div className="mini-bar-v">{cnt > 0 ? `${dispPct}%` : ''}</div>
+                          </div>
                         </div>
                         <div className="mini-bar-lbl">{wdLabels[i]}</div>
                       </div>
@@ -1099,9 +1108,10 @@ export function DashboardPage() {
                     const pct = (avg / maxDayAvgL10D) * 100
                     return (
                       <div className="mini-bar-g" key={last10DayKeys[i]}>
-                        <div className="mini-bar-v">{avg > 0 ? `${avg.toFixed(0)}s` : ''}</div>
                         <div className="mini-bar-track">
-                          <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                          <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                            <div className="mini-bar-v">{avg > 0 ? `${avg.toFixed(0)}s` : ''}</div>
+                          </div>
                         </div>
                         <div className="mini-bar-lbl">{l10dLabels[i]}</div>
                       </div>
@@ -1116,9 +1126,10 @@ export function DashboardPage() {
                     const pct = (mins / maxSavedMinsL10D) * 100
                     return (
                       <div className="mini-bar-g" key={last10DayKeys[i]}>
-                        <div className="mini-bar-v">{mins > 0 ? fmtTime(mins) : ''}</div>
                         <div className="mini-bar-track">
-                          <div className={`mini-bar ${mins === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                          <div className={`mini-bar ${mins === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                            <div className="mini-bar-v">{mins > 0 ? fmtTime(mins) : ''}</div>
+                          </div>
                         </div>
                         <div className="mini-bar-lbl">{l10dLabels[i]}</div>
                       </div>
@@ -1133,9 +1144,10 @@ export function DashboardPage() {
                     const pct = (avg / maxHourAvg) * 100
                     return (
                       <div className="mini-bar-g" key={h}>
-                        <div className="mini-bar-v">{avg > 0 ? `${avg.toFixed(0)}s` : ''}</div>
                         <div className="mini-bar-track">
-                          <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}></div>
+                          <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                            <div className="mini-bar-v">{avg > 0 ? `${avg.toFixed(0)}s` : ''}</div>
+                          </div>
                         </div>
                         <div className="mini-bar-lbl">{`${h}h`}</div>
                       </div>
@@ -1576,46 +1588,145 @@ export function DashboardPage() {
             </div>
           </div>
 
-          {/* Per-city breakdown */}
+          {/* Per-city breakdown — accordion rows */}
           {groupAutos.length > 1 && (
-            <div className="audit-detail-inner" style={{ paddingTop: 0 }}>
-              <div className="audit-detail-title">{lang === 'ES' ? 'Por ciudad' : 'By city'}</div>
-              <div className="audit-city-grid">
-                {groupAutos.map((a) => {
-                  const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
-                  const { city } = splitTaskCity(base)
-                  const cityRuns = a.runs.length
-                  const cityAvg = cityRuns > 0 ? a.runs.reduce((s, r) => s + (r.response_time ?? 0), 0) / cityRuns : null
-                  const citySavings = autoTotalSavings(a)
-                  return (
-                    <div key={a.id} className="audit-city-card">
-                      <div className="audit-city-name">{city ?? displayAutomationName(a)}</div>
-                      <div className="audit-city-metrics">
-                        <div className="audit-city-metric">
-                          <div className="audit-city-lbl">{t.msgs}</div>
-                          <div className="audit-city-val">{cityRuns > 0 ? cityRuns : '–'}</div>
+            <div className="city-rows">
+              {groupAutos.map((a) => {
+                const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
+                const { city } = splitTaskCity(base)
+                const cityRuns = a.runs.length
+                const cityAvg = cityRuns > 0 ? a.runs.reduce((s, r) => s + (r.response_time ?? 0), 0) / cityRuns : null
+                const citySavings = autoTotalSavings(a)
+                const isCityOpen = openCityIds.has(a.id)
+
+                const cityRepliesByDayL10D = (() => {
+                  const m: Record<string, number> = {}
+                  for (const x of a.runs) {
+                    const d = new Date(x.created_at)
+                    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+                    m[key] = (m[key] ?? 0) + 1
+                  }
+                  return last10DayKeys.map((k) => m[k] ?? 0)
+                })()
+
+                const cityAvgRespByDayL10D = (() => {
+                  const m: Record<string, { total: number; timeSum: number }> = {}
+                  for (const x of a.runs) {
+                    const d = new Date(x.created_at)
+                    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+                    m[key] ??= { total: 0, timeSum: 0 }
+                    m[key].total++
+                    m[key].timeSum += x.response_time ?? 0
+                  }
+                  return last10DayKeys.map((k) => {
+                    const v = m[k]
+                    if (!v || v.total === 0) return 0
+                    return v.timeSum / v.total
+                  })
+                })()
+
+                const citySavedMinsByDayL10D = cityRepliesByDayL10D.map((cnt) => cnt * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN)
+
+                const maxCityRepliesL10D = Math.max(...cityRepliesByDayL10D, 1)
+                const maxCityAvgRespL10D = Math.max(...cityAvgRespByDayL10D, 1)
+                const maxCitySavedMinsL10D = Math.max(...citySavedMinsByDayL10D, 1)
+
+                return (
+                  <div key={a.id} className={`city-row ${isCityOpen ? 'open' : ''}`}>
+                    <div
+                      className="city-row-summary"
+                      onClick={() => setOpenCityIds((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(a.id)) next.delete(a.id)
+                        else next.add(a.id)
+                        return next
+                      })}
+                    >
+                      <div className="city-row-name">{city ?? displayAutomationName(a)}</div>
+                      <div className="auto-stat">
+                        <small>{t.msgs}</small>
+                        <span className="val">{cityRuns > 0 ? cityRuns : '–'}</span>
+                      </div>
+                      <div className="auto-stat hl">
+                        <small>{t.avg}</small>
+                        <span className="val">{cityAvg != null ? `${cityAvg.toFixed(0)}s` : '–'}</span>
+                      </div>
+                      <div className="auto-stat good">
+                        <small>{t.saved}</small>
+                        <span className="val">{cityRuns > 0 ? fmtTime(cityRuns * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN) : '–'}</span>
+                      </div>
+                      <div className="auto-stat good">
+                        <small>{lang === 'ES' ? 'Costes ahorra.' : 'Costs saved'}</small>
+                        <span className="val">{citySavings != null ? fmtC(citySavings) : '–'}</span>
+                      </div>
+                      <div className="auto-stat">
+                        <small>{t.lastMsg}</small>
+                        <span className="val">{a.runs.length > 0 ? relLang(a.runs[0].created_at) : '–'}</span>
+                      </div>
+                      {chevronSvg()}
+                    </div>
+
+                    <div className="city-row-detail">
+                      <div className="strip-charts city-charts">
+                        <div className="strip-chart">
+                          <div className="mini-chart-title">{t.repliesL10D}</div>
+                          <div className="mini-bars">
+                            {cityRepliesByDayL10D.map((cnt, i) => {
+                              const pct = (cnt / maxCityRepliesL10D) * 100
+                              return (
+                                <div className="mini-bar-g" key={last10DayKeys[i]}>
+                                  <div className="mini-bar-track">
+                                    <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                                      <div className="mini-bar-v">{cnt > 0 ? `${cnt}` : ''}</div>
+                                    </div>
+                                  </div>
+                                  <div className="mini-bar-lbl">{l10dLabels[i]}</div>
+                                </div>
+                              )
+                            })}
+                          </div>
                         </div>
-                        <div className="audit-city-metric">
-                          <div className="audit-city-lbl">{t.avg}</div>
-                          <div className="audit-city-val">{cityAvg != null ? `${cityAvg.toFixed(0)}s` : '–'}</div>
+                        <div className="strip-chart">
+                          <div className="mini-chart-title">{t.savedTimeL10D}</div>
+                          <div className="mini-bars">
+                            {citySavedMinsByDayL10D.map((mins, i) => {
+                              const pct = (mins / maxCitySavedMinsL10D) * 100
+                              return (
+                                <div className="mini-bar-g" key={last10DayKeys[i]}>
+                                  <div className="mini-bar-track">
+                                    <div className={`mini-bar ${mins === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                                      <div className="mini-bar-v">{mins > 0 ? fmtTime(mins) : ''}</div>
+                                    </div>
+                                  </div>
+                                  <div className="mini-bar-lbl">{l10dLabels[i]}</div>
+                                </div>
+                              )
+                            })}
+                          </div>
                         </div>
-                        <div className="audit-city-metric">
-                          <div className="audit-city-lbl">{lang === 'ES' ? 'Tiempo ahorrado' : 'Time saved'}</div>
-                          <div className="audit-city-val">{cityRuns > 0 ? fmtTime(cityRuns * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN) : '–'}</div>
-                        </div>
-                        <div className="audit-city-metric">
-                          <div className="audit-city-lbl">{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</div>
-                          <div className="audit-city-val">{citySavings != null ? fmtC(citySavings) : '–'}</div>
-                        </div>
-                        <div className="audit-city-metric">
-                          <div className="audit-city-lbl">{t.lastMsg}</div>
-                          <div className="audit-city-val">{a.runs.length > 0 ? relLang(a.runs[0].created_at) : '–'}</div>
+                        <div className="strip-chart">
+                          <div className="mini-chart-title">{t.avgRespByDay}</div>
+                          <div className="mini-bars">
+                            {cityAvgRespByDayL10D.map((avg, i) => {
+                              const pct = (avg / maxCityAvgRespL10D) * 100
+                              return (
+                                <div className="mini-bar-g" key={last10DayKeys[i]}>
+                                  <div className="mini-bar-track">
+                                    <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                                      <div className="mini-bar-v">{avg > 0 ? `${avg.toFixed(0)}s` : ''}</div>
+                                    </div>
+                                  </div>
+                                  <div className="mini-bar-lbl">{l10dLabels[i]}</div>
+                                </div>
+                              )
+                            })}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  )
-                })}
-              </div>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
