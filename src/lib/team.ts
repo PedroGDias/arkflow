@@ -4,8 +4,8 @@ export const TEAM_MEMBERS = [
     initials: 'CA',
     name: 'Carla',
     role: { EN: 'Bookings Specialist', ES: 'Especialista de reservas' },
-    avatarBg: '#e4f2e8',
-    avatarColor: '#1a7a3a',
+    avatarBg: 'var(--brand-bg)',
+    avatarColor: 'var(--brand)',
     // Reservations lifecycle (incl. changes + cancellations)
     automationIds: [1, 2, 3, 4, 5] as number[],
   },

@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { env } from '../lib/env'
 import { supabase } from '../lib/supabase'
-import type { Automation, Run } from '../lib/types'
+import type { Automation, Client, Run } from '../lib/types'
 import { COST_ASSUMPTIONS, fmtTime, rel } from '../lib/roiMath'
 import { TEAM_MEMBERS } from '../lib/team'
 
@@ -47,6 +47,29 @@ function isDiscoveryAutomation(a: Pick<Automation, 'status'>) {
   return s.includes('discovery')
 }
 
+function splitTaskCity(name: string) {
+  const raw = (name ?? '').trim()
+  if (!raw) return { task: '—', city: null as string | null }
+  const idx = raw.indexOf(' - ')
+  if (idx === -1) return { task: raw, city: null }
+  const task = raw.slice(0, idx).trim() || '—'
+  const city = raw.slice(idx + 3).trim() || null
+  return { task, city }
+}
+
+function commonFiniteNumberOrNull(
+  rows: Automation[],
+  key: keyof Pick<Automation, 'manual_execution_time_min' | 'manual_hourly_cost'>,
+) {
+  const vals = rows
+    .map((a) => a[key])
+    .filter((v) => typeof v === 'number' && Number.isFinite(v)) as number[]
+  if (vals.length === 0) return null
+  const first = vals[0]
+  if (vals.every((v) => v === first)) return first
+  return null
+}
+
 function readMetricIntegerString(row: unknown, keys: string[]) {
   if (row == null || typeof row !== 'object') return null
   const rec = row as Record<string, unknown>
@@ -75,6 +98,87 @@ function readMetricNumber(row: unknown, keys: string[]) {
   return null
 }
 
+const CURRENCIES = [
+  { code: 'EUR', symbol: '€' },
+  { code: 'USD', symbol: '$' },
+  { code: 'GBP', symbol: '£' },
+  { code: 'CHF', symbol: 'Fr' },
+  { code: 'CAD', symbol: 'C$' },
+  { code: 'AUD', symbol: 'A$' },
+  { code: 'JPY', symbol: '¥' },
+  { code: 'CNY', symbol: '¥' },
+  { code: 'MXN', symbol: 'MX$' },
+  { code: 'BRL', symbol: 'R$' },
+] as const
+
+type CurrencyCode = (typeof CURRENCIES)[number]['code']
+
+function fmtEur(n: number | null, sym = '€') {
+  if (n == null || !Number.isFinite(n)) return '–'
+  return `${sym}${n.toFixed(n >= 10 ? 0 : 2)}`
+}
+
+function normalizeHexColor(s: unknown) {
+  if (typeof s !== 'string') return null
+  const v = s.trim()
+  if (!v) return null
+  if (/^#[0-9a-fA-F]{6}$/.test(v)) return v.toLowerCase()
+  return null
+}
+
+function hexToRgba(hex: string, alpha: number) {
+  const m = /^#?([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/.exec(hex)
+  if (!m) return `rgba(0,0,0,${alpha})`
+  const r = parseInt(m[1] ?? '00', 16)
+  const g = parseInt(m[2] ?? '00', 16)
+  const b = parseInt(m[3] ?? '00', 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+// ── Brand color localStorage helpers ──────────────────────────────────────
+const DEFAULT_BRAND_HEX = '#1a7a3a'
+
+function localBrandKey(cid: number) {
+  return `brand_color_${cid}`
+}
+
+function loadLocalBrand(cid: number) {
+  try {
+    return normalizeHexColor(localStorage.getItem(localBrandKey(cid))) ?? null
+  } catch {
+    return null
+  }
+}
+
+function saveLocalBrand(cid: number, hex: string) {
+  try {
+    localStorage.setItem(localBrandKey(cid), hex)
+  } catch { /* storage full or blocked */ }
+}
+
+// ── Currency localStorage helpers ──────────────────────────────────────────
+const DEFAULT_CURRENCY = 'EUR' as const
+
+function localCurrencyKey(cid: number) {
+  return `currency_${cid}`
+}
+
+function loadLocalCurrency(cid: number): (typeof CURRENCIES)[number]['code'] | null {
+  try {
+    const v = localStorage.getItem(localCurrencyKey(cid))
+    if (v && CURRENCIES.some((c) => c.code === v)) return v as (typeof CURRENCIES)[number]['code']
+    return null
+  } catch {
+    return null
+  }
+}
+
+function saveLocalCurrency(cid: number, code: string) {
+  try {
+    localStorage.setItem(localCurrencyKey(cid), code)
+  } catch { /* storage full or blocked */ }
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 export function DashboardPage() {
   const { signOut } = useAuth()
@@ -84,7 +188,13 @@ export function DashboardPage() {
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [brandSaveError, setBrandSaveError] = useState<string | null>(null)
 
+  // Initialize brand color from localStorage immediately so it's never green on first paint
+  const [client, setClient] = useState<Client | null>(() => {
+    const local = loadLocalBrand(cid)
+    return local ? { id: cid, primary_brand_color: local } : null
+  })
   const [autos, setAutos] = useState<Automation[]>([])
   const [runs, setRuns] = useState<Run[]>([])
   const [threadTotalsAll, setThreadTotalsAll] = useState<{ total: number | null; completed: number | null }>({ total: null, completed: null })
@@ -114,16 +224,23 @@ export function DashboardPage() {
   }, [autos])
 
   const [lang, setLang] = useState<'EN' | 'ES'>('EN')
+  const [currencyCode, setCurrencyCode] = useState<CurrencyCode>(() => loadLocalCurrency(cid) ?? DEFAULT_CURRENCY)
+  const currencySym = CURRENCIES.find((c) => c.code === currencyCode)?.symbol ?? '€'
+  const fmtC = (n: number | null) => fmtEur(n, currencySym)
 
   // accordion: open skill rows (inner level)
   const [openIds, setOpenIds] = useState<Set<number>>(() => new Set())
+  // accordion: open live automation groups (task-level, inside a team member)
+  const [openLiveGroupIds, setOpenLiveGroupIds] = useState<Set<string>>(() => new Set())
   // accordion: open team members (outer level) — Carla open by default
   const [openTeamIds, setOpenTeamIds] = useState<Set<string>>(() => new Set(['carla']))
   const [howOpen, setHowOpen] = useState(false)
   const [auditOpen, setAuditOpen] = useState(true)
+  const [openAuditIds, setOpenAuditIds] = useState<Set<string>>(() => new Set())
 
   const rowEls = useRef(new Map<number, HTMLDivElement>())
   const prevOpenIds = useRef<Set<number>>(new Set())
+  const seededBrandOnce = useRef(false)
 
   // ── i18n ────────────────────────────────────────────────────────────────
   const t = useMemo(() => {
@@ -133,10 +250,13 @@ export function DashboardPage() {
         howCalculated: 'How are these calculated?',
         avgResponseTime: 'Avg Response Time',
         vsManual: 'vs MANUAL',
-        timeSaved: '⏱ Time Saved',
+        timeSaved: 'Time Saved',
         timeSavedHow: 'Total staff time recovered based on the agreed manual handling time per request (5 min), multiplied by total replies processed.',
         avgRespHow: "Average response time of the automation's messages in production, compared to a 5 minute manual baseline.",
+        totalSavings: 'Costs Saved',
+        totalSavingsHow: '<b>Actual runs × manual cost per run</b> (€/hour × min/task ÷ 60) minus <b>automation cost × months active</b> (since first run). Only live automations with cost fields filled in are counted.',
         totalConversations: 'Customers',
+        totalConversationsHow: 'Unique customer threads handled end-to-end by the automation across all live skills.',
         pctFinished: '% Finished',
         finishedHow: 'Threads with status "completed" divided by total threads.',
         yourTeam: 'Your Team',
@@ -161,7 +281,7 @@ export function DashboardPage() {
         savedTimeL10D: 'Saved Time / Day (L10D)',
         msgs: 'Replies',
         avg: 'Avg',
-        saved: '⏱ Saved',
+        saved: 'Time Saved',
         perf: 'Perf',
         lastMsg: 'Last Reply',
         justNow: 'just now',
@@ -174,11 +294,14 @@ export function DashboardPage() {
         howCalculated: '¿Cómo se calcula?',
         avgResponseTime: 'Tiempo medio de respuesta',
         vsManual: 'vs MANUAL',
-        timeSaved: '⏱ Tiempo ahorrado',
+        timeSaved: 'Tiempo ahorrado',
         timeSavedHow:
           'Tiempo total recuperado según el tiempo manual acordado por solicitud (5 min), multiplicado por el total de respuestas procesadas.',
         avgRespHow: 'Tiempo medio de respuesta de los mensajes en producción, comparado con una línea base manual de 5 minutos.',
+        totalSavings: 'Costes ahorrados',
+        totalSavingsHow: '<b>Ejecuciones reales × coste manual por ejecución</b> (€/hora × min/tarea ÷ 60) menos <b>coste de automatización × meses activos</b> (desde la primera ejecución). Solo se cuentan automatizaciones live con los campos de coste completados.',
         totalConversations: 'Clientes',
+        totalConversationsHow: 'Hilos de clientes gestionados de extremo a extremo por la automatización en todas las skills activas.',
         pctFinished: '% finalizadas',
         finishedHow: 'Hilos con estado "completed" dividido por el total de hilos.',
         yourTeam: 'Tu equipo',
@@ -203,7 +326,7 @@ export function DashboardPage() {
         savedTimeL10D: 'Tiempo ahorrado / día (L10D)',
         msgs: 'Respuestas',
         avg: 'Media',
-        saved: '⏱ Ahorrado',
+        saved: 'Tiempo ahorrado',
         perf: 'Rend.',
         lastMsg: 'Última respuesta',
         justNow: 'ahora mismo',
@@ -244,6 +367,7 @@ export function DashboardPage() {
     setError(null)
     try {
       if (!supabase) {
+        setClient(null)
         setAutos([])
         setRuns([])
         setThreadTotalsAll({ total: null, completed: null })
@@ -253,10 +377,11 @@ export function DashboardPage() {
         return
       }
       const sb = supabase
-      const [aRes, rRes] = await Promise.all([
+      const [cRes, aRes, rRes] = await Promise.all([
+        sb.from('clients').select('id,client_name,primary_brand_color,currency').eq('id', cid).maybeSingle(),
         sb
           .from('automations')
-          .select('*,manual_sample_size,manual_avg_response_time')
+          .select('*,manual_sample_size,manual_avg_response_time,manual_execution_time_min,manual_hourly_cost,auto_monthly_cost')
           .eq('client_id', cid),
         sb
           .from('runs')
@@ -269,6 +394,34 @@ export function DashboardPage() {
       if (aRes.error) throw aRes.error
       if (rRes.error) throw rRes.error
 
+      // Brand color: DB is the source of truth when readable; localStorage is the fallback.
+      if (!cRes.error) {
+        const dbColor = normalizeHexColor((cRes.data as Client | null)?.primary_brand_color) ?? null
+        if (dbColor) {
+          // DB has a color — use it and keep localStorage in sync
+          saveLocalBrand(cid, dbColor)
+          setClient((cRes.data ?? null) as Client | null)
+        } else {
+          // DB row has no color — seed it from localStorage or the default
+          const localColor = loadLocalBrand(cid) ?? DEFAULT_BRAND_HEX
+          saveLocalBrand(cid, localColor)
+          setClient({ id: cid, primary_brand_color: localColor, client_name: (cRes.data as Client | null)?.client_name ?? null })
+          if (!seededBrandOnce.current) {
+            seededBrandOnce.current = true
+            void sb.from('clients').update({ primary_brand_color: localColor }).eq('id', cid)
+          }
+        }
+      }
+      // Currency: DB is source of truth; localStorage is the fallback.
+      if (!cRes.error && cRes.data) {
+        const dbCurrency = (cRes.data as Client).currency
+        if (dbCurrency && CURRENCIES.some((c) => c.code === dbCurrency)) {
+          saveLocalCurrency(cid, dbCurrency)
+          setCurrencyCode(dbCurrency as CurrencyCode)
+        }
+      }
+
+      // If SELECT failed, we keep whatever is in React state (initialised from localStorage above).
       setAutos((aRes.data ?? []) as Automation[])
       setRuns((rRes.data ?? []) as unknown as Run[])
 
@@ -377,12 +530,60 @@ export function DashboardPage() {
     return { avgRespS, timeSavedMins, speedPct }
   }, [runs, totalRuns])
 
+  // Total estimated savings for a single live automation based on actual run history:
+  //   runs × manual_cost_per_run  −  auto_monthly_cost × months_active
+  // months_active = span from oldest run to today (proxy for how long it's been live)
+  const autoTotalSavings = (a: AutoWithRuns): number | null => {
+    const mins = coerceFiniteNumber(a.manual_execution_time_min)
+    const hourly = coerceFiniteNumber(a.manual_hourly_cost)
+    if (mins == null || hourly == null) return null
+    const manualCostPerRun = (hourly * mins) / 60
+    const totalManualSaved = a.runs.length * manualCostPerRun
+    const autoC = coerceFiniteNumber(a.auto_monthly_cost)
+    let totalAutoCost = 0
+    if (autoC != null && a.runs.length > 0) {
+      const oldestRun = a.runs[a.runs.length - 1]
+      const monthsActive = (Date.now() - new Date(oldestRun.created_at).getTime()) / (1000 * 60 * 60 * 24 * 30.44)
+      totalAutoCost = autoC * Math.max(monthsActive, 0)
+    }
+    return totalManualSaved - totalAutoCost
+  }
+
+  // Client-level: sum total savings across all live (non-discovery) automations
+  const clientTotalSavings = useMemo(() => {
+    const liveAutos = Object.values(byAuto).filter((a) => !isDiscoveryAutomation(a))
+    let total: number | null = null
+    for (const a of liveAutos) {
+      const s = autoTotalSavings(a)
+      if (s != null) total = (total ?? 0) + s
+    }
+    return total
+  }, [byAuto])
+
   // Assign automations to team members; remainder goes to "unassigned"
   const assignedIds = new Set(TEAM_MEMBERS.flatMap((m) => m.automationIds))
   const discoveryAutos = useMemo(() => {
     const rows = autos.filter((a) => isDiscoveryAutomation(a))
     return rows.sort((a, b) => displayAutomationName(a).localeCompare(displayAutomationName(b), undefined, { sensitivity: 'base' }))
   }, [autos, lang])
+
+  const auditGroups = useMemo(() => {
+    const map = new Map<string, Automation[]>()
+    for (const a of discoveryAutos) {
+      const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
+      const { task } = splitTaskCity(base)
+      const bucket = map.get(task) ?? []
+      bucket.push(a)
+      map.set(task, bucket)
+    }
+    return Array.from(map.entries())
+      .map(([task, rows]) => ({
+        task,
+        rows: rows.slice().sort((x, y) => displayAutomationName(x).localeCompare(displayAutomationName(y), undefined, { sensitivity: 'base' })),
+      }))
+      .sort((a, b) => a.task.localeCompare(b.task, undefined, { sensitivity: 'base' }))
+  }, [discoveryAutos, lang])
+
   const discoveryIds = useMemo(() => new Set(discoveryAutos.map((a) => a.id)), [discoveryAutos])
   const unassignedAutos = Object.values(byAuto).filter((a) => !assignedIds.has(a.id) && !discoveryIds.has(a.id) && !isDiscoveryAutomation(a))
   const missingAssignedIds = useMemo(() => {
@@ -390,6 +591,174 @@ export function DashboardPage() {
     const present = new Set(autos.map((a) => a.id))
     return Array.from(assignedIds).filter((id) => !present.has(id)).sort((a, b) => a - b)
   }, [assignedIds, autos, loading])
+
+  async function saveAutomationCosts(
+    automationId: number,
+    patch: Partial<Pick<Automation, 'manual_execution_time_min' | 'manual_hourly_cost' | 'auto_monthly_cost'>>,
+  ) {
+    if (!supabase) return
+    const sb = supabase
+    setAutos((prev) => prev.map((a) => (a.id === automationId ? { ...a, ...patch } : a)))
+    const res = await sb
+      .from('automations')
+      .update(patch)
+      .eq('id', automationId)
+      .select('id,manual_execution_time_min,manual_hourly_cost,auto_monthly_cost')
+    console.log('[saveAutomationCosts]', { automationId, patch, data: res.data, error: res.error })
+    if (res.error) void load()
+  }
+
+  async function saveAutomationCostsGroup(
+    automationIds: number[],
+    patch: Partial<Pick<Automation, 'manual_execution_time_min' | 'manual_hourly_cost' | 'auto_monthly_cost'>>,
+  ) {
+    if (!supabase) return
+    if (automationIds.length === 0) return
+    const sb = supabase
+    const set = new Set(automationIds)
+    setAutos((prev) => prev.map((a) => (set.has(a.id) ? { ...a, ...patch } : a)))
+    const res = await sb
+      .from('automations')
+      .update(patch)
+      .in('id', automationIds)
+      .select('id,manual_execution_time_min,manual_hourly_cost,auto_monthly_cost')
+    console.log('[saveAutomationCostsGroup]', { automationIds, patch, data: res.data, error: res.error })
+    if (res.error) void load()
+  }
+
+  function renderCostModel(
+    a: Pick<Automation, 'id' | 'manual_execution_time_min' | 'manual_hourly_cost' | 'auto_monthly_cost' | 'manual_sample_size'>,
+    opts: { monthlyRunsEstimate: number | null; showMonthlyValue?: boolean; sampleWeeksLabel?: string },
+  ) {
+    const manualMins = coerceFiniteNumber(a.manual_execution_time_min)
+    const manualHourly = coerceFiniteNumber(a.manual_hourly_cost)
+    const autoMonthly = coerceFiniteNumber(a.auto_monthly_cost)
+    const monthlyRuns = opts.monthlyRunsEstimate != null && opts.monthlyRunsEstimate > 0 ? opts.monthlyRunsEstimate : null
+
+    const manualPerRun = manualMins != null && manualHourly != null ? (manualHourly * manualMins) / 60 : null
+    const autoPerRun = autoMonthly != null && monthlyRuns != null ? autoMonthly / monthlyRuns : null
+    const valuePerRun = manualPerRun != null && autoPerRun != null ? manualPerRun - autoPerRun : null
+    const monthlyValue = valuePerRun != null && monthlyRuns != null ? valuePerRun * monthlyRuns : null
+
+    return (
+      <div className="detail-strip" style={{ marginBottom: 12 }}>
+        <div className="strip-head">
+          {lang === 'ES' ? 'Modelo de coste' : 'Cost model'}
+          {opts.sampleWeeksLabel ? <span style={{ marginLeft: 10, color: 'var(--text4)' }}>({opts.sampleWeeksLabel})</span> : null}
+        </div>
+        <div className="strip-nums three-wide">
+          <div className="strip-num">
+            <div className="sn-lbl">{lang === 'ES' ? 'Manual (min/tarea)' : 'Manual (min/task)'}</div>
+            <input
+              type="number"
+              min={0}
+              step={0.5}
+              defaultValue={manualMins ?? ''}
+              onBlur={(e) => {
+                const v = e.currentTarget.value.trim()
+                const n = v === '' ? null : Number(v)
+                void saveAutomationCosts(a.id, { manual_execution_time_min: Number.isFinite(n as number) ? (n as number) : null })
+              }}
+              style={{
+                width: '100%',
+                fontFamily: 'var(--mono)',
+                fontSize: 12,
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                padding: '8px 10px',
+                marginTop: 6,
+                background: 'var(--white)',
+              }}
+            />
+            <div className="sn-lbl" style={{ marginTop: 10 }}>
+              {lang === 'ES' ? `Manual (${currencySym}/hora)` : `Manual (${currencySym}/hour)`}
+            </div>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              defaultValue={manualHourly ?? ''}
+              onBlur={(e) => {
+                const v = e.currentTarget.value.trim()
+                const n = v === '' ? null : Number(v)
+                void saveAutomationCosts(a.id, { manual_hourly_cost: Number.isFinite(n as number) ? (n as number) : null })
+              }}
+              style={{
+                width: '100%',
+                fontFamily: 'var(--mono)',
+                fontSize: 12,
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                padding: '8px 10px',
+                marginTop: 6,
+                background: 'var(--white)',
+              }}
+            />
+          </div>
+
+          <div className="strip-num">
+            <div className="sn-lbl">{lang === 'ES' ? `Auto (${currencySym}/mes)` : `Auto (${currencySym}/month)`}</div>
+            <input
+              type="number"
+              min={0}
+              step={10}
+              defaultValue={autoMonthly ?? ''}
+              onBlur={(e) => {
+                const v = e.currentTarget.value.trim()
+                const n = v === '' ? null : Number(v)
+                void saveAutomationCosts(a.id, { auto_monthly_cost: Number.isFinite(n as number) ? (n as number) : null })
+              }}
+              style={{
+                width: '100%',
+                fontFamily: 'var(--mono)',
+                fontSize: 12,
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                padding: '8px 10px',
+                marginTop: 6,
+                background: 'var(--white)',
+              }}
+            />
+            <div className="sn-lbl" style={{ marginTop: 10 }}>
+              {lang === 'ES' ? 'Tareas/mes (estim.)' : 'Tasks/month (est.)'}
+            </div>
+            <div className="sn-val" style={{ marginTop: 6 }}>
+              {monthlyRuns != null ? Math.round(monthlyRuns).toLocaleString() : '–'}
+            </div>
+            {a.manual_sample_size != null && opts.sampleWeeksLabel ? (
+              <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text4)' }}>
+                {lang === 'ES' ? 'Muestra:' : 'Sample:'} {Math.round(a.manual_sample_size).toLocaleString()}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="strip-num">
+            <div className="sn-lbl">{lang === 'ES' ? `Manual ${currencySym}/tarea` : `Manual ${currencySym}/task`}</div>
+            <div className="sn-val">{fmtC(manualPerRun)}</div>
+
+            <div className="sn-lbl" style={{ marginTop: 10 }}>
+              {lang === 'ES' ? `Auto ${currencySym}/tarea` : `Auto ${currencySym}/task`}
+            </div>
+            <div className="sn-val">{fmtC(autoPerRun)}</div>
+
+            <div className="sn-lbl" style={{ marginTop: 10 }}>
+              {lang === 'ES' ? `Valor generado ${currencySym}/tarea` : `Value generated ${currencySym}/task`}
+            </div>
+            <div className="sn-val green">{fmtC(valuePerRun)}</div>
+
+            {opts.showMonthlyValue ? (
+              <>
+                <div className="sn-lbl" style={{ marginTop: 10 }}>
+                  {lang === 'ES' ? `Valor potencial ${currencySym}/mes` : `Potential value ${currencySym}/month`}
+                </div>
+                <div className="sn-val green">{fmtC(monthlyValue)}</div>
+              </>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   // ── Skill row renderer ────────────────────────────────────────────────────
   function renderSkillRow(a: AutoWithRuns) {
@@ -485,6 +854,7 @@ export function DashboardPage() {
     const isOpen = openIds.has(a.id)
     const manualSample = coerceFiniteNumber(a.manual_sample_size)
     const manualAvg = coerceFiniteNumber(a.manual_avg_response_time)
+    const monthlyRunsEstimate = manualSample != null && manualSample > 0 ? (manualSample / 5) * (52 / 12) : null
 
     return (
       <div
@@ -552,27 +922,93 @@ export function DashboardPage() {
         </div>
 
         <div className="auto-detail">
-          {/* Manual baseline — compact callout, visually distinct from automation metrics */}
-          <div className="benchmark-callout">
-            <span className="benchmark-callout-label">
-              {lang === 'ES' ? 'Benchmark manual' : 'Manual benchmark'}
-            </span>
-            <span className="benchmark-callout-vals">
-              <span className="benchmark-callout-val">
-                {manualSample != null ? manualSample : '–'}
-              </span>
-              {' '}{lang === 'ES' ? 'msgs' : 'msgs'}{' '}
-              <span className="benchmark-callout-note">
-                ({lang === 'ES' ? 'muestra' : 'sample'})
-              </span>
-              {' '}
-              <span className="benchmark-callout-sep">·</span>{' '}
-              {lang === 'ES' ? 'media ' : 'avg '}
-              <span className="benchmark-callout-val">
-                {manualAvg != null ? fmtDurationS(manualAvg) : '–'}
-              </span>
-            </span>
-          </div>
+          {/* Compact cost model + benchmark — single row */}
+          {(() => {
+            const manualMins = coerceFiniteNumber(a.manual_execution_time_min)
+            const manualHourly = coerceFiniteNumber(a.manual_hourly_cost)
+            const autoMonthly = coerceFiniteNumber(a.auto_monthly_cost)
+            const monthlyRuns = monthlyRunsEstimate != null && monthlyRunsEstimate > 0 ? monthlyRunsEstimate : null
+            const manualPerRun = manualMins != null && manualHourly != null ? (manualHourly * manualMins) / 60 : null
+            const manualMonthly = manualPerRun != null && monthlyRuns != null ? manualPerRun * monthlyRuns : null
+            const totalSavings = autoTotalSavings(a)
+            return (
+              <div className="detail-strip cost-row-strip">
+                <div className="strip-head" style={{ background: hexToRgba(brandHex, 0.10) }}>{lang === 'ES' ? 'Modelo de coste' : 'Cost model'}</div>
+                <div className="cost-row-nums">
+                  <div className="cost-row-cell cost-row-bm">
+                    <small>{lang === 'ES' ? 'Benchmark manual · 5 semanas' : 'Manual benchmark · 5 weeks'}</small>
+                    <span className="crv">
+                      {manualSample != null ? manualSample.toLocaleString() : '–'} msgs · avg {manualAvg != null ? fmtDurationS(manualAvg) : '–'}
+                    </span>
+                  </div>
+                  <div className="cost-row-cell">
+                    <small>{lang === 'ES' ? 'Manual (min/tarea)' : 'Manual (min/task)'}</small>
+                    <input
+                      className="audit-input"
+                      type="number" min={0} step={0.5}
+                      defaultValue={manualMins ?? ''}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={(e) => {
+                        const v = e.currentTarget.value.trim()
+                        const n = v === '' ? null : Number(v)
+                        void saveAutomationCostsGroup([a.id], {
+                          manual_execution_time_min: Number.isFinite(n as number) ? (n as number) : null,
+                        })
+                      }}
+                    />
+                  </div>
+                  <div className="cost-row-cell">
+                    <small>{lang === 'ES' ? `Manual (${currencySym}/hora)` : `Manual (${currencySym}/hour)`}</small>
+                    <input
+                      className="audit-input"
+                      type="number" min={0} step={1}
+                      defaultValue={manualHourly ?? ''}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={(e) => {
+                        const v = e.currentTarget.value.trim()
+                        const n = v === '' ? null : Number(v)
+                        void saveAutomationCostsGroup([a.id], {
+                          manual_hourly_cost: Number.isFinite(n as number) ? (n as number) : null,
+                        })
+                      }}
+                    />
+                  </div>
+                  <div className="cost-row-cell">
+                    <small>{lang === 'ES' ? `Auto (${currencySym}/mes)` : `Auto (${currencySym}/mo)`}</small>
+                    <input
+                      className="audit-input"
+                      type="number" min={0} step={10}
+                      defaultValue={autoMonthly ?? ''}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={(e) => {
+                        const v = e.currentTarget.value.trim()
+                        const n = v === '' ? null : Number(v)
+                        void saveAutomationCostsGroup([a.id], {
+                          auto_monthly_cost: Number.isFinite(n as number) ? (n as number) : null,
+                        })
+                      }}
+                    />
+                  </div>
+                  <div className="cost-row-cell">
+                    <small>{lang === 'ES' ? 'Tareas/mes (est.)' : 'Tasks/mo (est.)'}</small>
+                    <span className="crv">{monthlyRuns != null ? Math.round(monthlyRuns).toLocaleString() : '–'}</span>
+                  </div>
+                  <div className="cost-row-cell">
+                    <small>{lang === 'ES' ? `Manual ${currencySym}/mes` : `Manual ${currencySym}/mo`}</small>
+                    <span className="crv">{fmtC(manualMonthly)}</span>
+                  </div>
+                  <div className="cost-row-cell">
+                    <small>{lang === 'ES' ? `Auto ${currencySym}/mes` : `Auto ${currencySym}/mo`}</small>
+                    <span className="crv">{fmtC(autoMonthly)}</span>
+                  </div>
+                  <div className="cost-row-cell">
+                    <small>{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</small>
+                    <span className="crv green">{fmtC(totalSavings)}</span>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
 
           {/* Volume */}
           <div className="detail-strip">
@@ -714,75 +1150,474 @@ export function DashboardPage() {
     )
   }
 
-  function renderAuditRow(a: Automation) {
-    const manualSampleMsgs = readMetricIntegerString(a, ['manual_sample_size']) ?? (typeof a.manual_sample_size === 'number' ? String(Math.trunc(a.manual_sample_size)) : null)
-    const manualAvg = coerceFiniteNumber(a.manual_avg_response_time)
+  function renderAuditGroupRow(group: { task: string; rows: Automation[] }) {
+    const ids = group.rows.map((r) => r.id)
+    const sampleSum = group.rows.reduce((s, a) => s + (coerceFiniteNumber(a.manual_sample_size) ?? 0), 0)
+    const avgRespWeighted = (() => {
+      const rows = group.rows
+        .map((a) => ({
+          n: coerceFiniteNumber(a.manual_sample_size) ?? 0,
+          avg: coerceFiniteNumber(a.manual_avg_response_time),
+        }))
+        .filter((r) => r.n > 0 && r.avg != null)
+      const denom = rows.reduce((s, r) => s + r.n, 0)
+      if (denom <= 0) return null
+      const numer = rows.reduce((s, r) => s + r.n * (r.avg ?? 0), 0)
+      return numer / denom
+    })()
 
-    // Manual performance metrics (columns live on `automations`, names may vary)
-    const totalThreads =
-      readMetricNumber(a, ['manual_threads', 'manual_total_threads', 'manual_total_conversations', 'manual_nr_conversations', 'manual_nr_threads']) ??
-      readMetricNumber(a, ['nr_conversations', 'nr_threads', 'total_threads', 'total_conversations'])
-    const completedThreads =
-      readMetricNumber(a, ['manual_completed', 'manual_completed_threads', 'manual_completed_conversations', 'completed_threads', 'completed_conversations']) ??
-      readMetricNumber(a, ['completed'])
-    const hangingThreads =
-      readMetricNumber(a, ['manual_hanging', 'manual_hanging_threads', 'manual_hanging_conversations', 'hanging_threads', 'hanging_conversations']) ??
-      readMetricNumber(a, ['hanging'])
-    const avgTimeToCompleteS = readMetricNumber(a, [
-      'manual_avg_time_to_complete_s',
-      'manual_avg_time_to_complete',
-      'manual_avg_time_to_complete_seconds',
-      'avg_time_to_complete_s',
-      'avg_time_to_complete',
-      'avg_time_to_complete_seconds',
-    ])
+    const manualMinsCommon = commonFiniteNumberOrNull(group.rows, 'manual_execution_time_min')
+    const manualHourlyCommon = commonFiniteNumberOrNull(group.rows, 'manual_hourly_cost')
+    const autoMonthlySum = group.rows.reduce((s, a) => s + (coerceFiniteNumber(a.auto_monthly_cost) ?? 0), 0)
 
-    const completionPct =
-      totalThreads != null && totalThreads > 0 && completedThreads != null ? (completedThreads / totalThreads) * 100 : null
-    const hangingPct =
-      totalThreads != null && totalThreads > 0 && hangingThreads != null ? (hangingThreads / totalThreads) * 100 : null
+    const sampleWeeks = 5
+    const weeksPerMonth = 52 / 12 // 4.333...
+    const monthlyRunsEstimate = sampleSum > 0 ? (sampleSum / sampleWeeks) * weeksPerMonth : null
 
-    const isDiscovery = isDiscoveryAutomation(a)
-    const statusLabel = isDiscovery ? (lang === 'ES' ? 'Discovery' : 'Discovery') : (a.status ?? '—').toString()
-    const statusClass = isDiscovery ? 'discovery' : 'offline'
+    const key = `audit:${group.task}`
+    const isOpen = openAuditIds.has(key)
 
     return (
-      <div key={a.id} className="auto-row" data-auto-id={a.id}>
-        <div className="auto-summary audit-summary" style={{ cursor: 'default' }}>
-          <div className="auto-name">
-            {displayAutomationName(a)}
-            <span className={`row-live ${statusClass}`}>
-              <span className={`live-dot ${statusClass}`}></span>
-              {statusLabel}
-            </span>
+      <div key={key} className={`auto-row ${isOpen ? 'open' : ''}`} data-auto-id={key}>
+        <div className="audit-section-bar">
+          <div className="audit-section-bar-name" />
+          <div className="audit-section-bar-labels">
+            <span className="audit-section-label">{lang === 'ES' ? 'Manual' : 'Manual'}</span>
+            <span className="audit-section-label">{lang === 'ES' ? 'Auto' : 'Auto'}</span>
+          </div>
+          <div className="audit-section-bar-chevron" />
+        </div>
+
+        <div
+          className="auto-summary audit-summary"
+          onClick={() => {
+            setOpenAuditIds((prev) => {
+              const next = new Set(prev)
+              if (next.has(key)) next.delete(key)
+              else next.add(key)
+              return next
+            })
+          }}
+        >
+          <div className="audit-name">
+            <div className="auto-name">{group.task}</div>
+            <div className="audit-sub">
+              {group.rows.length}{' '}
+              {lang === 'ES'
+                ? group.rows.length === 1
+                  ? 'ubicación'
+                  : 'ubicaciones'
+                : group.rows.length === 1
+                  ? 'location'
+                  : 'locations'}
+            </div>
           </div>
 
-          <div className="auto-stat audit-stat">
-            <small>{lang === 'ES' ? 'Muestra (msgs)' : 'Sample (msgs)'}</small>
-            <span className="val">{manualSampleMsgs != null ? manualSampleMsgs : '–'}</span>
+          <div className="audit-groups">
+            {/* MANUAL section */}
+            <div className="audit-group audit-group-manual">
+              <div className="audit-group-cols">
+                <div className="auto-stat audit-stat">
+                  <small>{lang === 'ES' ? 'Muestra (msgs)' : 'Sample (msgs)'}</small>
+                  <span className="val">{sampleSum > 0 ? Math.round(sampleSum).toLocaleString() : '–'}</span>
+                </div>
+                <div className="auto-stat audit-stat hl">
+                  <small>{lang === 'ES' ? 'Resp. media' : 'Avg resp'}</small>
+                  <span className="val">{avgRespWeighted != null ? fmtDurationS(avgRespWeighted) : '–'}</span>
+                </div>
+                <div className="auto-stat audit-stat">
+                  <small>{lang === 'ES' ? 'Min/tarea' : 'Min/task'}</small>
+                  <span className="val">
+                    <input
+                      className="audit-input"
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      defaultValue={manualMinsCommon ?? ''}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={(e) => {
+                        const v = e.currentTarget.value.trim()
+                        const n = v === '' ? null : Number(v)
+                        void saveAutomationCostsGroup(ids, {
+                          manual_execution_time_min: Number.isFinite(n as number) ? (n as number) : null,
+                        })
+                      }}
+                    />
+                  </span>
+                </div>
+                <div className="auto-stat audit-stat">
+                  <small>{lang === 'ES' ? `${currencySym}/hora` : `${currencySym}/hour`}</small>
+                  <span className="val">
+                    <input
+                      className="audit-input"
+                      type="number"
+                      min={0}
+                      step={1}
+                      defaultValue={manualHourlyCommon ?? ''}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={(e) => {
+                        const v = e.currentTarget.value.trim()
+                        const n = v === '' ? null : Number(v)
+                        void saveAutomationCostsGroup(ids, { manual_hourly_cost: Number.isFinite(n as number) ? (n as number) : null })
+                      }}
+                    />
+                  </span>
+                </div>
+                <div className="auto-stat audit-stat">
+                  <small>{lang === 'ES' ? `Manual ${currencySym}/mes` : `Manual ${currencySym}/mo`}</small>
+                  <span className="val">
+                    {(() => {
+                      if (manualMinsCommon == null || manualHourlyCommon == null || monthlyRunsEstimate == null) return '–'
+                      const manualPerRun = (manualHourlyCommon * manualMinsCommon) / 60
+                      return fmtC(manualPerRun * monthlyRunsEstimate)
+                    })()}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* AUTO section */}
+            <div className="audit-group audit-group-auto">
+              <div className="audit-group-cols">
+                <div className="auto-stat audit-stat">
+                  <small>{lang === 'ES' ? `Auto ${currencySym}/mes` : `Auto ${currencySym}/mo`}</small>
+                  <span className="val">
+                    <input
+                      className="audit-input"
+                      type="number"
+                      min={0}
+                      step={10}
+                      defaultValue={autoMonthlySum > 0 ? autoMonthlySum : ''}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={(e) => {
+                        const v = e.currentTarget.value.trim()
+                        const n = v === '' ? null : Number(v)
+                        if (!Number.isFinite(n as number)) return
+                        const perCity = (n as number) / Math.max(ids.length, 1)
+                        void saveAutomationCostsGroup(ids, { auto_monthly_cost: perCity })
+                      }}
+                    />
+                  </span>
+                </div>
+                <div className="auto-stat audit-stat audit-stat-savings good">
+                  <small>{lang === 'ES' ? 'Potencial de ahorro' : 'Savings potential'}</small>
+                  <span className="val">
+                    {(() => {
+                      if (manualMinsCommon == null || manualHourlyCommon == null || monthlyRunsEstimate == null)
+                        return <span className="audit-savings-val">–</span>
+                      const manualPerRun = (manualHourlyCommon * manualMinsCommon) / 60
+                      const manualMonthly = manualPerRun * monthlyRunsEstimate
+                      const savings = fmtC(manualMonthly - autoMonthlySum)
+                      return (
+                        <span className="audit-savings-val">
+                          {savings}
+                          <span className="audit-savings-suffix">{lang === 'ES' ? '/ mes' : '/ mo'}</span>
+                        </span>
+                      )
+                    })()}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
-          <div className="auto-stat audit-stat hl">
-            <small>{lang === 'ES' ? 'Resp. media (manual)' : 'Avg resp (manual)'}</small>
-            <span className="val">{manualAvg != null ? fmtDurationS(manualAvg) : '–'}</span>
+
+          {chevronSvg()}
+        </div>
+
+        <div className="auto-detail audit-detail">
+          <div className="audit-detail-inner">
+            <div className="audit-detail-title">{lang === 'ES' ? 'Por ciudad' : 'By city'}</div>
+            <div className="audit-city-grid">
+              {group.rows.map((a) => {
+                // Manual performance metrics (columns live on `automations`, names may vary)
+                const totalThreads =
+                  readMetricNumber(a, ['manual_threads', 'manual_total_threads', 'manual_total_conversations', 'manual_nr_conversations', 'manual_nr_threads']) ??
+                  readMetricNumber(a, ['nr_conversations', 'nr_threads', 'total_threads', 'total_conversations'])
+                const completedThreads =
+                  readMetricNumber(a, ['manual_completed', 'manual_completed_threads', 'manual_completed_conversations', 'completed_threads', 'completed_conversations']) ??
+                  readMetricNumber(a, ['completed'])
+                const hangingThreads =
+                  readMetricNumber(a, ['manual_hanging', 'manual_hanging_threads', 'manual_hanging_conversations', 'hanging_threads', 'hanging_conversations']) ??
+                  readMetricNumber(a, ['hanging'])
+                const avgTimeToCompleteS = readMetricNumber(a, [
+                  'manual_avg_time_to_complete_s',
+                  'manual_avg_time_to_complete',
+                  'manual_avg_time_to_complete_seconds',
+                  'avg_time_to_complete_s',
+                  'avg_time_to_complete',
+                  'avg_time_to_complete_seconds',
+                ])
+
+                const completionPct =
+                  totalThreads != null && totalThreads > 0 && completedThreads != null ? (completedThreads / totalThreads) * 100 : null
+                const hangingPct = totalThreads != null && totalThreads > 0 && hangingThreads != null ? (hangingThreads / totalThreads) * 100 : null
+
+                const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
+                const { city } = splitTaskCity(base)
+                const displayCity = city ?? displayAutomationName(a)
+
+                const sampleSize = coerceFiniteNumber(a.manual_sample_size)
+                const manualAvgResp = coerceFiniteNumber(a.manual_avg_response_time)
+
+                return (
+                  <div key={a.id} className="audit-city-card">
+                    <div className="audit-city-name">{displayCity}</div>
+                    <div className="audit-city-metrics">
+                      <div className="audit-city-metric">
+                        <div className="audit-city-lbl">{lang === 'ES' ? 'Mensajes' : 'Messages'}</div>
+                        <div className="audit-city-val">{sampleSize != null ? Math.round(sampleSize).toLocaleString() : '–'}</div>
+                      </div>
+                      <div className="audit-city-metric">
+                        <div className="audit-city-lbl">{lang === 'ES' ? 'T. resp. medio' : 'Avg resp time'}</div>
+                        <div className="audit-city-val">{manualAvgResp != null ? fmtDurationS(manualAvgResp) : '–'}</div>
+                      </div>
+                      <div className="audit-city-metric">
+                        <div className="audit-city-lbl">{lang === 'ES' ? 'Hilos' : 'Threads'}</div>
+                        <div className="audit-city-val">{totalThreads != null ? Math.round(totalThreads) : '–'}</div>
+                      </div>
+                      <div className="audit-city-metric">
+                        <div className="audit-city-lbl">{lang === 'ES' ? 'Completadas' : 'Completed'}</div>
+                        <div className="audit-city-val">{completionPct != null ? `${completionPct.toFixed(0)}%` : '–'}</div>
+                      </div>
+                      <div className="audit-city-metric">
+                        <div className="audit-city-lbl">{lang === 'ES' ? 'Hanging' : 'Hanging'}</div>
+                        <div className="audit-city-val">{hangingPct != null ? `${hangingPct.toFixed(0)}%` : '–'}</div>
+                      </div>
+                      <div className="audit-city-metric">
+                        <div className="audit-city-lbl">{lang === 'ES' ? 'Tiempo para cerrar' : 'Avg time to close'}</div>
+                        <div className="audit-city-val">{avgTimeToCompleteS != null ? fmtDurationS(avgTimeToCompleteS) : '–'}</div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
-          <div className="auto-stat audit-stat">
-            <small>{lang === 'ES' ? 'Hilos' : 'Threads'}</small>
-            <span className="val">{totalThreads != null ? Math.round(totalThreads) : '–'}</span>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Live automation group row (task with per-city breakdown) ─────────────
+  function renderLiveGroupRow(groupKey: string, task: string, groupAutos: AutoWithRuns[]) {
+    const ids = groupAutos.map((a) => a.id)
+    const allRuns = groupAutos.flatMap((a) => a.runs)
+    const totalRuns = allRuns.length
+    const avgRespS = totalRuns > 0 ? allRuns.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalRuns : 0
+    const timeSavedMins = totalRuns * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN
+    const lastCreatedAt = allRuns.length > 0 ? allRuns[0].created_at : null
+
+    const hasLive = groupAutos.some((a) => (a.status ?? '').toString().toLowerCase() === 'live')
+    const hasTesting = groupAutos.some((a) => (a.status ?? '').toString().toLowerCase() === 'testing')
+    const statusClass = hasLive ? 'live' : hasTesting ? 'testing' : 'offline'
+    const statusLabel = hasLive ? t.activeStatus : hasTesting ? t.testingStatus : t.inactiveStatus
+
+    const manualMinsCommon = commonFiniteNumberOrNull(groupAutos, 'manual_execution_time_min')
+    const manualHourlyCommon = commonFiniteNumberOrNull(groupAutos, 'manual_hourly_cost')
+    const autoMonthlySum = groupAutos.reduce((s, a) => s + (coerceFiniteNumber(a.auto_monthly_cost) ?? 0), 0)
+
+    const sampleSum = groupAutos.reduce((s, a) => s + (coerceFiniteNumber(a.manual_sample_size) ?? 0), 0)
+    const manualAvgWeighted = (() => {
+      const rows = groupAutos
+        .map((a) => ({ n: coerceFiniteNumber(a.manual_sample_size) ?? 0, avg: coerceFiniteNumber(a.manual_avg_response_time) }))
+        .filter((r) => r.n > 0 && r.avg != null)
+      const denom = rows.reduce((s, r) => s + r.n, 0)
+      if (denom <= 0) return null
+      return rows.reduce((s, r) => s + r.n * (r.avg ?? 0), 0) / denom
+    })()
+    const monthlyRunsEstimate = sampleSum > 0 ? (sampleSum / 5) * (52 / 12) : null
+    const manualPerRun = manualMinsCommon != null && manualHourlyCommon != null ? (manualHourlyCommon * manualMinsCommon) / 60 : null
+    const manualMonthly = manualPerRun != null && monthlyRunsEstimate != null ? manualPerRun * monthlyRunsEstimate : null
+
+    let groupTotalSavings: number | null = null
+    for (const a of groupAutos) {
+      const s = autoTotalSavings(a)
+      if (s != null) groupTotalSavings = (groupTotalSavings ?? 0) + s
+    }
+
+    const isOpen = openLiveGroupIds.has(groupKey)
+
+    return (
+      <div key={groupKey} className={`auto-row ${isOpen ? 'open' : ''}`}>
+        <div
+          className="auto-summary"
+          onClick={() => setOpenLiveGroupIds((prev) => {
+            const next = new Set(prev)
+            if (next.has(groupKey)) next.delete(groupKey)
+            else next.add(groupKey)
+            return next
+          })}
+        >
+          <div className="auto-name" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {task}
+              <span className={`row-live ${statusClass}`}>
+                <span className={`live-dot ${statusClass}`}></span>
+                {statusLabel}
+              </span>
+              {groupAutos.length > 1 && (
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text4)' }}>
+                  {groupAutos.length} {lang === 'ES' ? 'ciudades' : 'cities'}
+                </span>
+              )}
+            </div>
+            <div className="team-member-role">{lang === 'ES' ? 'Tarea' : 'Task'}</div>
           </div>
-          <div className="auto-stat audit-stat good">
-            <small>{lang === 'ES' ? 'Completadas' : 'Completed'}</small>
-            <span className="val">
-              {completionPct != null ? `${completionPct.toFixed(0)}%` : '–'}
-            </span>
+          <div className="auto-stat">
+            <small>{t.msgs}</small>
+            <span className="val">{totalRuns}</span>
           </div>
-          <div className="auto-stat audit-stat">
-            <small>{lang === 'ES' ? 'Hanging' : 'Hanging'}</small>
-            <span className="val">{hangingPct != null ? `${hangingPct.toFixed(0)}%` : '–'}</span>
+          <div className="auto-stat hl">
+            <small>{t.avg}</small>
+            <span className="val">{avgRespS > 0 ? `${avgRespS.toFixed(0)}s` : '–'}</span>
           </div>
-          <div className="auto-stat audit-stat hl">
-            <small>{lang === 'ES' ? 'Tiempo para cerrar' : 'Avg time to close'}</small>
-            <span className="val">{avgTimeToCompleteS != null ? fmtDurationS(avgTimeToCompleteS) : '–'}</span>
+          <div className="auto-stat good">
+            <small>{t.saved}</small>
+            <span className="val">{fmtTime(timeSavedMins)}</span>
           </div>
+          <div className="auto-stat good">
+            <small>{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</small>
+            <span className="val">{groupTotalSavings != null ? fmtC(groupTotalSavings) : '–'}</span>
+          </div>
+          <div className="auto-stat">
+            <small>{t.lastMsg}</small>
+            <span className="val">{lastCreatedAt ? relLang(lastCreatedAt) : '–'}</span>
+          </div>
+          {chevronSvg()}
+        </div>
+
+        <div className="auto-detail">
+          {/* Two side-by-side panels: benchmark + cost model */}
+          <div className="cost-panels">
+            {/* Panel 1 – Manual performance benchmark */}
+            <div className="detail-strip benchmark">
+              <div className="strip-head" style={{ background: hexToRgba(brandHex, 0.10) }}>
+                {lang === 'ES' ? 'Benchmark manual · 5 sem.' : 'Manual benchmark · 5 wks'}
+              </div>
+              <div className="cost-row-nums">
+                <div className="cost-row-cell">
+                  <small>{lang === 'ES' ? 'Muestra' : 'Sample size'}</small>
+                  <span className="crv">{sampleSum > 0 ? sampleSum.toLocaleString() : '–'}</span>
+                </div>
+                <div className="cost-row-cell">
+                  <small>{lang === 'ES' ? 'Tiempo medio resp.' : 'Avg resp time'}</small>
+                  <span className="crv">{manualAvgWeighted != null ? fmtDurationS(manualAvgWeighted) : '–'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Panel 2 – Cost model inputs + computed */}
+            <div className="detail-strip">
+              <div className="strip-head" style={{ background: hexToRgba(brandHex, 0.10) }}>
+                {lang === 'ES' ? 'Modelo de coste' : 'Cost model'}
+              </div>
+              <div className="cost-row-nums">
+                <div className="cost-row-cell">
+                  <small>{lang === 'ES' ? 'Manual (min/tarea)' : 'Manual (min/task)'}</small>
+                  <input
+                    className="audit-input"
+                    type="number" min={0} step={0.5}
+                    defaultValue={manualMinsCommon ?? ''}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={(e) => {
+                      const v = e.currentTarget.value.trim()
+                      const n = v === '' ? null : Number(v)
+                      void saveAutomationCostsGroup(ids, { manual_execution_time_min: Number.isFinite(n as number) ? (n as number) : null })
+                    }}
+                  />
+                </div>
+                <div className="cost-row-cell">
+                  <small>{lang === 'ES' ? `Manual (${currencySym}/hora)` : `Manual (${currencySym}/hour)`}</small>
+                  <input
+                    className="audit-input"
+                    type="number" min={0} step={1}
+                    defaultValue={manualHourlyCommon ?? ''}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={(e) => {
+                      const v = e.currentTarget.value.trim()
+                      const n = v === '' ? null : Number(v)
+                      void saveAutomationCostsGroup(ids, { manual_hourly_cost: Number.isFinite(n as number) ? (n as number) : null })
+                    }}
+                  />
+                </div>
+                <div className="cost-row-cell">
+                  <small>{lang === 'ES' ? `Auto total (${currencySym}/mes)` : `Auto total (${currencySym}/mo)`}</small>
+                  <input
+                    className="audit-input"
+                    type="number" min={0} step={10}
+                    defaultValue={autoMonthlySum > 0 ? autoMonthlySum : ''}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={(e) => {
+                      const v = e.currentTarget.value.trim()
+                      const n = v === '' ? null : Number(v)
+                      if (!Number.isFinite(n as number)) return
+                      const perCity = (n as number) / Math.max(ids.length, 1)
+                      void saveAutomationCostsGroup(ids, { auto_monthly_cost: perCity })
+                    }}
+                  />
+                </div>
+                <div className="cost-row-cell">
+                  <small>{lang === 'ES' ? 'Tareas/mes (est.)' : 'Tasks/mo (est.)'}</small>
+                  <span className="crv">{monthlyRunsEstimate != null ? Math.round(monthlyRunsEstimate).toLocaleString() : '–'}</span>
+                </div>
+                <div className="cost-row-cell">
+                  <small>{lang === 'ES' ? `Manual ${currencySym}/mes` : `Manual ${currencySym}/mo`}</small>
+                  <span className="crv">{fmtC(manualMonthly)}</span>
+                </div>
+                <div className="cost-row-cell">
+                  <small>{lang === 'ES' ? `Auto ${currencySym}/mes` : `Auto ${currencySym}/mo`}</small>
+                  <span className="crv">{fmtC(autoMonthlySum > 0 ? autoMonthlySum : null)}</span>
+                </div>
+                <div className="cost-row-cell">
+                  <small>{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</small>
+                  <span className="crv green">{fmtC(groupTotalSavings)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Per-city breakdown */}
+          {groupAutos.length > 1 && (
+            <div className="audit-detail-inner" style={{ paddingTop: 0 }}>
+              <div className="audit-detail-title">{lang === 'ES' ? 'Por ciudad' : 'By city'}</div>
+              <div className="audit-city-grid">
+                {groupAutos.map((a) => {
+                  const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
+                  const { city } = splitTaskCity(base)
+                  const cityRuns = a.runs.length
+                  const cityAvg = cityRuns > 0 ? a.runs.reduce((s, r) => s + (r.response_time ?? 0), 0) / cityRuns : null
+                  const citySavings = autoTotalSavings(a)
+                  return (
+                    <div key={a.id} className="audit-city-card">
+                      <div className="audit-city-name">{city ?? displayAutomationName(a)}</div>
+                      <div className="audit-city-metrics">
+                        <div className="audit-city-metric">
+                          <div className="audit-city-lbl">{t.msgs}</div>
+                          <div className="audit-city-val">{cityRuns > 0 ? cityRuns : '–'}</div>
+                        </div>
+                        <div className="audit-city-metric">
+                          <div className="audit-city-lbl">{t.avg}</div>
+                          <div className="audit-city-val">{cityAvg != null ? `${cityAvg.toFixed(0)}s` : '–'}</div>
+                        </div>
+                        <div className="audit-city-metric">
+                          <div className="audit-city-lbl">{lang === 'ES' ? 'Tiempo ahorrado' : 'Time saved'}</div>
+                          <div className="audit-city-val">{cityRuns > 0 ? fmtTime(cityRuns * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN) : '–'}</div>
+                        </div>
+                        <div className="audit-city-metric">
+                          <div className="audit-city-lbl">{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</div>
+                          <div className="audit-city-val">{citySavings != null ? fmtC(citySavings) : '–'}</div>
+                        </div>
+                        <div className="audit-city-metric">
+                          <div className="audit-city-lbl">{t.lastMsg}</div>
+                          <div className="audit-city-val">{a.runs.length > 0 ? relLang(a.runs[0].created_at) : '–'}</div>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     )
@@ -796,6 +1631,14 @@ export function DashboardPage() {
     const avgRespS = totalReplies > 0 ? memberRuns.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalReplies : 0
     const timeSavedMins = totalReplies * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN
     const perfPct = avgRespS > 0 ? ((COST_ASSUMPTIONS.MANUAL_RESPONSE_S - avgRespS) / COST_ASSUMPTIONS.MANUAL_RESPONSE_S) * 100 : 0
+    const memberSavings = (() => {
+      let total: number | null = null
+      for (const a of memberAutos) {
+        const s = autoTotalSavings(a)
+        if (s != null) total = (total ?? 0) + s
+      }
+      return total
+    })()
     const hasLive = memberAutos.some((a) => (a.status ?? 'Live').toString().toLowerCase() === 'live')
     const hasTesting = memberAutos.some((a) => (a.status ?? '').toString().toLowerCase() === 'testing')
     const isOpen = openTeamIds.has(member.id)
@@ -860,6 +1703,12 @@ export function DashboardPage() {
             </span>
             <small>{t.saved}</small>
           </div>
+          <div className="team-stat">
+            <span className={`ts-val ${memberSavings != null && memberSavings > 0 ? 'green' : 'dim'}`}>
+              {memberSavings != null ? fmtC(memberSavings) : '–'}
+            </span>
+            <small>{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</small>
+          </div>
 
           {chevronSvg()}
         </div>
@@ -872,7 +1721,19 @@ export function DashboardPage() {
               </div>
             ) : memberAutos.length > 0 ? (
               <div className="auto-list">
-                {memberAutos.map((a) => renderSkillRow(a))}
+                {(() => {
+                  const groups = new Map<string, AutoWithRuns[]>()
+                  for (const a of memberAutos) {
+                    const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
+                    const { task } = splitTaskCity(base)
+                    const bucket = groups.get(task) ?? []
+                    bucket.push(a)
+                    groups.set(task, bucket)
+                  }
+                  return Array.from(groups.entries())
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([task, rows]) => renderLiveGroupRow(`${member.id}:${task}`, task, rows))
+                })()}
               </div>
             ) : (
               <div className="skills-empty">{t.noSkills}</div>
@@ -884,63 +1745,155 @@ export function DashboardPage() {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
+  const brandHex = normalizeHexColor(client?.primary_brand_color) ?? DEFAULT_BRAND_HEX
+  const brandBg = hexToRgba(brandHex, 0.13)
+  const [brandHexDraft, setBrandHexDraft] = useState(brandHex)
+  const [brandPickerOpen, setBrandPickerOpen] = useState(false)
+  const brandPickerWrapRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    setBrandHexDraft(brandHex)
+  }, [brandHex])
+
+  useEffect(() => {
+    if (!brandPickerOpen) return
+    const onDown = (e: MouseEvent) => {
+      const el = brandPickerWrapRef.current
+      if (!el) return
+      if (e.target instanceof Node && el.contains(e.target)) return
+      setBrandPickerOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [brandPickerOpen])
+
+  async function saveClientCurrency(code: CurrencyCode) {
+    saveLocalCurrency(cid, code)
+    if (!supabase) return
+    await supabase.from('clients').update({ currency: code }).eq('id', cid)
+  }
+
+  async function saveClientBrandColor(next: unknown) {
+    const hex = normalizeHexColor(next)
+    if (!hex) return
+    setBrandSaveError(null)
+    // Apply immediately — localStorage keeps it across reloads even if DB fails
+    saveLocalBrand(cid, hex)
+    setClient((prev) => (prev ? { ...prev, primary_brand_color: hex } : { id: cid, primary_brand_color: hex }))
+    if (!supabase) return
+    const res = await supabase.from('clients').update({ primary_brand_color: hex }).eq('id', cid).select('id,primary_brand_color').maybeSingle()
+    if (res.error) {
+      setBrandSaveError(`DB error: ${res.error.message}`)
+      return
+    }
+    const saved = normalizeHexColor(res.data?.primary_brand_color) ?? null
+    if (saved !== hex) {
+      setBrandSaveError('Color saved locally but DB did not confirm (check RLS UPDATE policy for clients table).')
+    }
+  }
+
   return (
-    <div className="page">
+    <div
+      className="page"
+      style={{
+        // Set all brand/green vars directly so .kpi-val.green, .auto-stat.good etc.
+        // always pick up the live brand color without relying on :root indirection.
+        ['--brand' as never]: brandHex,
+        ['--brand-bg' as never]: brandBg,
+        ['--green' as never]: brandHex,
+        ['--green-bg' as never]: brandBg,
+      }}
+    >
       <header className="header">
         <div className="wrap">
           <a className="logo" href="#">
             <img src="/logos/arkflow-logo.svg" alt="Arkflow" className="logo-img" />
           </a>
           <div className="header-r">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div
-                style={{
-                  display: 'inline-flex',
-                  border: '1px solid var(--border)',
-                  borderRadius: 999,
-                  overflow: 'hidden',
+            <div className="header-ctls">
+              <select
+                className="hdr-ctl hdr-currency"
+                value={currencyCode}
+                onChange={(e) => {
+                  const code = e.currentTarget.value as CurrencyCode
+                  setCurrencyCode(code)
+                  void saveClientCurrency(code)
                 }}
+                aria-label="Currency"
               >
+                {CURRENCIES.map((c) => (
+                  <option key={c.code} value={c.code}>{c.code}</option>
+                ))}
+              </select>
+
+              <div className="brand-picker" ref={brandPickerWrapRef}>
+                <button
+                  type="button"
+                  className="hdr-ctl hdr-btn brand-btn"
+                  aria-haspopup="dialog"
+                  aria-expanded={brandPickerOpen}
+                  onClick={() => setBrandPickerOpen((v) => !v)}
+                  title={lang === 'ES' ? 'Color de marca' : 'Brand color'}
+                >
+                  <span className="brand-swatch" style={{ background: brandHex }} aria-hidden="true" />
+                </button>
+
+                {brandPickerOpen ? (
+                  <div className="brand-pop" role="dialog" aria-label={lang === 'ES' ? 'Selector de color' : 'Color picker'}>
+                    <div className="brand-pop-row">
+                      <label className="brand-pop-lbl">{lang === 'ES' ? 'Picker' : 'Picker'}</label>
+                      <input
+                        type="color"
+                        className="brand-color-input"
+                        value={brandHex}
+                        onChange={(e) => void saveClientBrandColor(e.currentTarget.value)}
+                        aria-label={lang === 'ES' ? 'Color de marca' : 'Brand color'}
+                      />
+                    </div>
+                    <div className="brand-pop-row">
+                      <label className="brand-pop-lbl">HEX</label>
+                      <input
+                        type="text"
+                        inputMode="text"
+                        spellCheck={false}
+                        className="brand-hex-input"
+                        value={brandHexDraft}
+                        onChange={(e) => setBrandHexDraft(e.currentTarget.value)}
+                        onBlur={() => {
+                          const norm = normalizeHexColor(brandHexDraft)
+                          if (norm) void saveClientBrandColor(norm)
+                          else setBrandHexDraft(brandHex)
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter') return
+                          ;(e.currentTarget as HTMLInputElement).blur()
+                          setBrandPickerOpen(false)
+                        }}
+                        placeholder={DEFAULT_BRAND_HEX}
+                        aria-label={lang === 'ES' ? 'HEX de marca' : 'Brand HEX'}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="hdr-seg">
                 <button
                   onClick={() => setLang('EN')}
-                  style={{
-                    fontFamily: 'var(--mono)',
-                    fontSize: 11,
-                    border: 0,
-                    background: lang === 'EN' ? 'var(--text)' : 'var(--white)',
-                    color: lang === 'EN' ? 'var(--white)' : 'var(--text2)',
-                    padding: '6px 10px',
-                    cursor: 'pointer',
-                  }}
+                  className={`hdr-seg-btn ${lang === 'EN' ? 'active' : ''}`}
                 >
                   EN
                 </button>
                 <button
                   onClick={() => setLang('ES')}
-                  style={{
-                    fontFamily: 'var(--mono)',
-                    fontSize: 11,
-                    border: 0,
-                    background: lang === 'ES' ? 'var(--text)' : 'var(--white)',
-                    color: lang === 'ES' ? 'var(--white)' : 'var(--text2)',
-                    padding: '6px 10px',
-                    cursor: 'pointer',
-                  }}
+                  className={`hdr-seg-btn ${lang === 'ES' ? 'active' : ''}`}
                 >
                   ES
                 </button>
               </div>
               <button
                 onClick={() => void signOut()}
-                style={{
-                  fontFamily: 'var(--mono)',
-                  fontSize: 11,
-                  border: '1px solid var(--border)',
-                  background: 'var(--white)',
-                  borderRadius: 999,
-                  padding: '6px 12px',
-                  cursor: 'pointer',
-                }}
+                className="hdr-ctl hdr-btn"
               >
                 {t.signOut}
               </button>
@@ -965,20 +1918,19 @@ export function DashboardPage() {
               <div className="kpi-val green" id="kAvgResp">
                 {kpis.avgRespS > 0 ? `${kpis.avgRespS.toFixed(0)}s` : '–'}
               </div>
-              <div className="kpi-lbl">
-                {t.avgResponseTime}{' '}
-                <span style={{ color: 'var(--text4)' }}>
-                  ({t.vsManual} {manualOverallAvgRespS != null ? fmtDurationS(manualOverallAvgRespS) : '–'})
-                </span>
-              </div>
+              <div className="kpi-lbl">{t.avgResponseTime}</div>
             </div>
             <div className="kpi">
               <div className="kpi-val green" id="kTimeSaved">
                 {fmtTime(kpis.timeSavedMins)}
               </div>
-              <div className="kpi-lbl">
-                {t.timeSaved} <span style={{ color: 'var(--text4)' }}>({totalRuns} {t.msgs} × 5m)</span>
+              <div className="kpi-lbl">{t.timeSaved}</div>
+            </div>
+            <div className="kpi">
+              <div className={`kpi-val ${clientTotalSavings != null && clientTotalSavings > 0 ? 'green' : ''}`} id="kSavings">
+                {clientTotalSavings != null ? fmtC(clientTotalSavings) : '–'}
               </div>
+              <div className="kpi-lbl">{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</div>
             </div>
             <div className="kpi highlight">
               <div className="kpi-val" id="kTotalConvos">
@@ -996,6 +1948,12 @@ export function DashboardPage() {
             </div>
           </div>
 
+          {brandSaveError ? (
+            <div className="error-msg" style={{ marginTop: 12 }}>
+              Failed to save brand color to DB. {brandSaveError}
+            </div>
+          ) : null}
+
           <button className={`how-btn ${howOpen ? 'open' : ''}`} onClick={() => setHowOpen((v) => !v)}>
             {t.howCalculated}
           </button>
@@ -1008,6 +1966,14 @@ export function DashboardPage() {
               <div className="how-item">
                 <div className="how-name">{t.timeSaved}</div>
                 <div className="how-desc">{t.timeSavedHow}</div>
+              </div>
+              <div className="how-item">
+                <div className="how-name">{t.totalSavings}</div>
+                <div className="how-desc" dangerouslySetInnerHTML={{ __html: t.totalSavingsHow }} />
+              </div>
+              <div className="how-item">
+                <div className="how-name">{t.totalConversations}</div>
+                <div className="how-desc">{t.totalConversationsHow}</div>
               </div>
               <div className="how-item">
                 <div className="how-name">{t.pctFinished}</div>
@@ -1055,7 +2021,7 @@ export function DashboardPage() {
                       </div>
                     </div>
                     <div className="team-stat">
-                      <span className="ts-val">{discoveryAutos.length}</span>
+                      <span className="ts-val">{auditGroups.length}</span>
                       <small>{lang === 'ES' ? 'Oportunidades' : 'Opportunities'}</small>
                     </div>
                     {chevronSvg()}
@@ -1063,7 +2029,7 @@ export function DashboardPage() {
                   <div className="team-member-body">
                     <div className="team-member-skills">
                       <div className="auto-list">
-                        {discoveryAutos.map((a) => renderAuditRow(a))}
+                        {auditGroups.map((g) => renderAuditGroupRow(g))}
                       </div>
                     </div>
                   </div>
@@ -1097,7 +2063,19 @@ export function DashboardPage() {
                   <div className="team-member-body">
                     <div className="team-member-skills">
                       <div className="auto-list">
-                        {unassignedAutos.map((a) => renderSkillRow(a))}
+                        {(() => {
+                          const groups = new Map<string, AutoWithRuns[]>()
+                          for (const a of unassignedAutos) {
+                            const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
+                            const { task } = splitTaskCity(base)
+                            const bucket = groups.get(task) ?? []
+                            bucket.push(a)
+                            groups.set(task, bucket)
+                          }
+                          return Array.from(groups.entries())
+                            .sort(([a], [b]) => a.localeCompare(b))
+                            .map(([task, rows]) => renderLiveGroupRow(`unassigned:${task}`, task, rows))
+                        })()}
                       </div>
                     </div>
                   </div>

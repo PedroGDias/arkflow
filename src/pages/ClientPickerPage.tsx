@@ -70,7 +70,6 @@ export function ClientPickerPage() {
     })
   }, [])
 
-
   return (
     <div className="page">
       <header className="header">
@@ -79,55 +78,24 @@ export function ClientPickerPage() {
             <img src="/logos/arkflow-logo.svg" alt="Arkflow" className="logo-img" />
           </a>
           <div className="header-r">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div
-                style={{
-                  display: 'inline-flex',
-                  border: '1px solid var(--border)',
-                  borderRadius: 999,
-                  overflow: 'hidden',
-                }}
-              >
+            <div className="header-ctls">
+              <div className="hdr-seg">
                 <button
                   onClick={() => setLang('EN')}
-                  style={{
-                    fontFamily: 'var(--mono)',
-                    fontSize: 11,
-                    border: 0,
-                    background: lang === 'EN' ? 'var(--text)' : 'var(--white)',
-                    color: lang === 'EN' ? 'var(--white)' : 'var(--text2)',
-                    padding: '6px 10px',
-                    cursor: 'pointer',
-                  }}
+                  className={`hdr-seg-btn ${lang === 'EN' ? 'active' : ''}`}
                 >
                   EN
                 </button>
                 <button
                   onClick={() => setLang('ES')}
-                  style={{
-                    fontFamily: 'var(--mono)',
-                    fontSize: 11,
-                    border: 0,
-                    background: lang === 'ES' ? 'var(--text)' : 'var(--white)',
-                    color: lang === 'ES' ? 'var(--white)' : 'var(--text2)',
-                    padding: '6px 10px',
-                    cursor: 'pointer',
-                  }}
+                  className={`hdr-seg-btn ${lang === 'ES' ? 'active' : ''}`}
                 >
                   ES
                 </button>
               </div>
               <button
                 onClick={() => void signOut()}
-                style={{
-                  fontFamily: 'var(--mono)',
-                  fontSize: 11,
-                  border: '1px solid var(--border)',
-                  background: 'var(--white)',
-                  borderRadius: 999,
-                  padding: '6px 12px',
-                  cursor: 'pointer',
-                }}
+                className="hdr-ctl hdr-btn"
               >
                 {lang === 'EN' ? 'Sign out' : 'Cerrar sesión'}
               </button>

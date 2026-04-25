@@ -10,6 +10,9 @@ export type Automation = {
   status?: 'Live' | 'Testing' | string | null
   manual_sample_size?: number | null
   manual_avg_response_time?: number | null
+  manual_execution_time_min?: number | null
+  manual_hourly_cost?: number | null
+  auto_monthly_cost?: number | null
 }
 
 export type Run = {
@@ -18,5 +21,12 @@ export type Run = {
   created_at: string
   status: string | null
   response_time: number | null
+}
+
+export type Client = {
+  id: number
+  client_name?: string | null
+  primary_brand_color?: string | null
+  currency?: string | null
 }
 
