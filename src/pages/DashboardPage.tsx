@@ -26,7 +26,7 @@ function chevronSvg() {
 }
 
 function fmtDurationS(seconds: number) {
-  if (!Number.isFinite(seconds) || seconds < 0) return '–'
+  if (!Number.isFinite(seconds) || seconds < 0) return '-'
   if (seconds >= 24 * 60 * 60) {
     const totalHours = Math.round(seconds / 3600)
     const d = Math.floor(totalHours / 24)
@@ -59,7 +59,7 @@ function splitTaskCity(name: string) {
 
 function commonFiniteNumberOrNull(
   rows: Automation[],
-  key: keyof Pick<Automation, 'manual_execution_time_min' | 'manual_hourly_cost'>,
+  key: keyof Pick<Automation, 'manual_execution_time_min' | 'manual_hourly_cost' | 'manual_avg_response_time'>,
 ) {
   const vals = rows
     .map((a) => a[key])
@@ -114,7 +114,7 @@ const CURRENCIES = [
 type CurrencyCode = (typeof CURRENCIES)[number]['code']
 
 function fmtEur(n: number | null, sym = '€') {
-  if (n == null || !Number.isFinite(n)) return '–'
+  if (n == null || !Number.isFinite(n)) return '-'
   return `${sym}${n.toFixed(n >= 10 ? 0 : 2)}`
 }
 
@@ -239,6 +239,7 @@ export function DashboardPage() {
   const [howOpen, setHowOpen] = useState(false)
   const [auditOpen, setAuditOpen] = useState(false)
   const [openAuditIds, setOpenAuditIds] = useState<Set<string>>(() => new Set())
+  const [activeTab, setActiveTab] = useState<'team' | 'opportunities'>('team')
 
   const rowEls = useRef(new Map<number, HTMLDivElement>())
   const prevOpenIds = useRef<Set<number>>(new Set())
@@ -290,6 +291,8 @@ export function DashboardPage() {
         quoteRequest: 'Quote Request',
         completed: 'Completed',
         allClients: '← All clients',
+        opportunities: 'Opportunities',
+        settingsTab: 'Settings',
       },
       ES: {
         clientDashboard: 'Panel de Cliente',
@@ -335,6 +338,8 @@ export function DashboardPage() {
         quoteRequest: 'Solicitud de Presupuesto',
         completed: 'Completadas',
         allClients: '← Todos los clientes',
+        opportunities: 'Oportunidades',
+        settingsTab: 'Configuración',
       },
     } as const
     return dict[lang]
@@ -748,7 +753,7 @@ export function DashboardPage() {
               {lang === 'ES' ? 'Tareas/mes (estim.)' : 'Tasks/month (est.)'}
             </div>
             <div className="sn-val" style={{ marginTop: 6 }}>
-              {monthlyRuns != null ? Math.round(monthlyRuns).toLocaleString() : '–'}
+              {monthlyRuns != null ? Math.round(monthlyRuns).toLocaleString() : '-'}
             </div>
             {a.manual_sample_size != null && opts.sampleWeeksLabel ? (
               <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text4)' }}>
@@ -788,8 +793,8 @@ export function DashboardPage() {
   // ── Skill row renderer ────────────────────────────────────────────────────
   function renderSkillRow(a: AutoWithRuns) {
     const r = a.runs
-    const avgT = r.length > 0 ? (r.reduce((s, x) => s + (x.response_time ?? 0), 0) / r.length).toFixed(0) : '–'
-    const last = r.length > 0 ? relLang(r[0].created_at) : '–'
+    const avgT = r.length > 0 ? (r.reduce((s, x) => s + (x.response_time ?? 0), 0) / r.length).toFixed(0) : '-'
+    const last = r.length > 0 ? relLang(r[0].created_at) : '-'
     const showThreadStats = isQuoteAutomation(a)
     const statusRaw = (a.status ?? 'Live').toString()
     const statusLower = statusRaw.toLowerCase()
@@ -900,13 +905,13 @@ export function DashboardPage() {
           {showThreadStats ? (
             <div className="auto-stat">
               <small>{t.totalConversations}</small>
-              <span className="val">{totalThreadsAuto != null ? totalThreadsAuto : '–'}</span>
+              <span className="val">{totalThreadsAuto != null ? totalThreadsAuto : '-'}</span>
             </div>
           ) : null}
           {showThreadStats ? (
             <div className="auto-stat good">
               <small>{t.completed}</small>
-              <span className="val">{totalThreadsAuto != null && totalThreadsAuto > 0 ? `${finishedPctAuto.toFixed(0)}%` : '–'}</span>
+              <span className="val">{totalThreadsAuto != null && totalThreadsAuto > 0 ? `${finishedPctAuto.toFixed(0)}%` : '-'}</span>
             </div>
           ) : null}
           <div className="auto-stat hl">
@@ -950,7 +955,7 @@ export function DashboardPage() {
                   <div className="cost-row-cell cost-row-bm">
                     <small>{lang === 'ES' ? 'Benchmark manual · 5 semanas' : 'Manual benchmark · 5 weeks'}</small>
                     <span className="crv">
-                      {manualSample != null ? manualSample.toLocaleString() : '–'} msgs · avg {manualAvg != null ? fmtDurationS(manualAvg) : '–'}
+                      {manualSample != null ? manualSample.toLocaleString() : '-'} msgs · avg {manualAvg != null ? fmtDurationS(manualAvg) : '-'}
                     </span>
                   </div>
                   <div className="cost-row-cell">
@@ -1003,7 +1008,7 @@ export function DashboardPage() {
                   </div>
                   <div className="cost-row-cell">
                     <small>{lang === 'ES' ? 'Ejecuciones' : 'Runs'}</small>
-                    <span className="crv">{r.length > 0 ? r.length.toLocaleString() : '–'}</span>
+                    <span className="crv">{r.length > 0 ? r.length.toLocaleString() : '-'}</span>
                   </div>
                   <div className="cost-row-cell">
                     <small>{lang === 'ES' ? `Manual total` : `Manual total`}</small>
@@ -1184,7 +1189,8 @@ export function DashboardPage() {
     const manualMinsCommon = commonFiniteNumberOrNull(group.rows, 'manual_execution_time_min')
     const manualHourlyCommon = commonFiniteNumberOrNull(group.rows, 'manual_hourly_cost')
     const autoMonthlySum = group.rows.reduce((s, a) => s + (coerceFiniteNumber(a.auto_monthly_cost) ?? 0), 0)
-    const avgRespCommon = commonFiniteNumberOrNull(group.rows, 'manual_avg_response_time')
+    // Use weighted average as the input seed (commonFiniteNumberOrNull returns null when cities differ)
+    const avgRespCommon = avgRespWeighted != null ? Math.round(avgRespWeighted) : null
 
     const sampleWeeks = 5
     const weeksPerMonth = 52 / 12 // 4.333...
@@ -1315,7 +1321,7 @@ export function DashboardPage() {
                   <small>{lang === 'ES' ? `Manual ${currencySym}/mes` : `Manual ${currencySym}/mo`}</small>
                   <span className="val">
                     {(() => {
-                      if (manualMinsCommon == null || manualHourlyCommon == null || monthlyRunsEstimate == null) return '–'
+                      if (manualMinsCommon == null || manualHourlyCommon == null || monthlyRunsEstimate == null) return '-'
                       const manualPerRun = (manualHourlyCommon * manualMinsCommon) / 60
                       return fmtC(manualPerRun * monthlyRunsEstimate)
                     })()}
@@ -1352,7 +1358,7 @@ export function DashboardPage() {
                   <span className="val">
                     {(() => {
                       if (manualMinsCommon == null || manualHourlyCommon == null || monthlyRunsEstimate == null)
-                        return <span className="audit-savings-val">–</span>
+                        return <span className="audit-savings-val">-</span>
                       const manualPerRun = (manualHourlyCommon * manualMinsCommon) / 60
                       const manualMonthly = manualPerRun * monthlyRunsEstimate
                       const savings = fmtC(manualMonthly - autoMonthlySum)
@@ -1453,19 +1459,19 @@ export function DashboardPage() {
                       </div>
                       <div className="audit-city-metric">
                         <div className="audit-city-lbl">{lang === 'ES' ? 'Hilos' : 'Threads'}</div>
-                        <div className="audit-city-val">{totalThreads != null ? Math.round(totalThreads) : '–'}</div>
+                        <div className="audit-city-val">{totalThreads != null ? Math.round(totalThreads) : '-'}</div>
                       </div>
                       <div className="audit-city-metric">
                         <div className="audit-city-lbl">{lang === 'ES' ? 'Completadas' : 'Completed'}</div>
-                        <div className="audit-city-val">{completionPct != null ? `${completionPct.toFixed(0)}%` : '–'}</div>
+                        <div className="audit-city-val">{completionPct != null ? `${completionPct.toFixed(0)}%` : '-'}</div>
                       </div>
                       <div className="audit-city-metric">
                         <div className="audit-city-lbl">{lang === 'ES' ? 'Hanging' : 'Hanging'}</div>
-                        <div className="audit-city-val">{hangingPct != null ? `${hangingPct.toFixed(0)}%` : '–'}</div>
+                        <div className="audit-city-val">{hangingPct != null ? `${hangingPct.toFixed(0)}%` : '-'}</div>
                       </div>
                       <div className="audit-city-metric">
                         <div className="audit-city-lbl">{lang === 'ES' ? 'Tiempo para cerrar' : 'Avg time to close'}</div>
-                        <div className="audit-city-val">{avgTimeToCompleteS != null ? fmtDurationS(avgTimeToCompleteS) : '–'}</div>
+                        <div className="audit-city-val">{avgTimeToCompleteS != null ? fmtDurationS(avgTimeToCompleteS) : '-'}</div>
                       </div>
                     </div>
                   </div>
@@ -1552,7 +1558,7 @@ export function DashboardPage() {
           </div>
           <div className="auto-stat hl">
             <small>{t.avg}</small>
-            <span className="val">{avgRespS > 0 ? `${avgRespS.toFixed(0)}s` : '–'}</span>
+            <span className="val">{avgRespS > 0 ? `${avgRespS.toFixed(0)}s` : '-'}</span>
           </div>
           <div className="auto-stat good">
             <small>{t.saved}</small>
@@ -1560,11 +1566,11 @@ export function DashboardPage() {
           </div>
           <div className="auto-stat good">
             <small>{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</small>
-            <span className="val">{groupTotalSavings != null ? fmtC(groupTotalSavings) : '–'}</span>
+            <span className="val">{groupTotalSavings != null ? fmtC(groupTotalSavings) : '-'}</span>
           </div>
           <div className="auto-stat">
             <small>{t.lastMsg}</small>
-            <span className="val">{lastCreatedAt ? relLang(lastCreatedAt) : '–'}</span>
+            <span className="val">{lastCreatedAt ? relLang(lastCreatedAt) : '-'}</span>
           </div>
           {chevronSvg()}
         </div>
@@ -1572,7 +1578,7 @@ export function DashboardPage() {
         <div className="auto-detail">
           {/* Two side-by-side panels: benchmark + ROI model */}
           <div className="cost-panels">
-            {/* Panel 1 – Manual performance benchmark */}
+            {/* Panel 1 - Manual performance benchmark */}
             <div className="detail-strip benchmark">
               <div className="strip-head" style={{ background: hexToRgba(brandHex, 0.10) }}>
                 {lang === 'ES' ? 'Benchmark manual · 5 sem.' : 'Manual benchmark · 5 wks'}
@@ -1580,16 +1586,16 @@ export function DashboardPage() {
               <div className="cost-row-nums">
                 <div className="cost-row-cell">
                   <small>{lang === 'ES' ? 'Muestra' : 'Sample size'}</small>
-                  <span className="crv">{sampleSum > 0 ? sampleSum.toLocaleString() : '–'}</span>
+                  <span className="crv">{sampleSum > 0 ? sampleSum.toLocaleString() : '-'}</span>
                 </div>
                 <div className="cost-row-cell">
                   <small>{lang === 'ES' ? 'Tiempo medio resp.' : 'Avg resp time'}</small>
-                  <span className="crv">{manualAvgWeighted != null ? fmtDurationS(manualAvgWeighted) : '–'}</span>
+                  <span className="crv">{manualAvgWeighted != null ? fmtDurationS(manualAvgWeighted) : '-'}</span>
                 </div>
               </div>
             </div>
 
-            {/* Panel 2 – ROI model inputs + computed */}
+            {/* Panel 2 - ROI model inputs + computed */}
             <div className="detail-strip">
               <div className="strip-head" style={{ background: hexToRgba(brandHex, 0.10) }}>
                 {lang === 'ES' ? 'Modelo ROI' : 'ROI model'}
@@ -1641,7 +1647,7 @@ export function DashboardPage() {
                 </div>
                 <div className="cost-row-cell">
                   <small>{lang === 'ES' ? 'Ejecuciones' : 'Runs'}</small>
-                  <span className="crv">{totalRuns > 0 ? totalRuns.toLocaleString() : '–'}</span>
+                  <span className="crv">{totalRuns > 0 ? totalRuns.toLocaleString() : '-'}</span>
                 </div>
                 <div className="cost-row-cell">
                   <small>Manual total</small>
@@ -1725,23 +1731,23 @@ export function DashboardPage() {
                       </div>
                       <div className="auto-stat">
                         <small>{t.msgs}</small>
-                        <span className="val">{cityRuns > 0 ? cityRuns : '–'}</span>
+                        <span className="val">{cityRuns > 0 ? cityRuns : '-'}</span>
                       </div>
                       <div className="auto-stat hl">
                         <small>{t.avg}</small>
-                        <span className="val">{cityAvg != null ? `${cityAvg.toFixed(0)}s` : '–'}</span>
+                        <span className="val">{cityAvg != null ? `${cityAvg.toFixed(0)}s` : '-'}</span>
                       </div>
                       <div className="auto-stat good">
                         <small>{t.saved}</small>
-                        <span className="val">{cityRuns > 0 ? fmtTime(cityRuns * (coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN)) : '–'}</span>
+                        <span className="val">{cityRuns > 0 ? fmtTime(cityRuns * (coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN)) : '-'}</span>
                       </div>
                       <div className="auto-stat good">
                         <small>{lang === 'ES' ? 'Costes ahorra.' : 'Costs saved'}</small>
-                        <span className="val">{citySavings != null ? fmtC(citySavings) : '–'}</span>
+                        <span className="val">{citySavings != null ? fmtC(citySavings) : '-'}</span>
                       </div>
                       <div className="auto-stat">
                         <small>{t.lastMsg}</small>
-                        <span className="val">{a.runs.length > 0 ? relLang(a.runs[0].created_at) : '–'}</span>
+                        <span className="val">{a.runs.length > 0 ? relLang(a.runs[0].created_at) : '-'}</span>
                       </div>
                       {chevronSvg()}
                     </div>
@@ -1875,28 +1881,28 @@ export function DashboardPage() {
           </div>
 
           <div className="team-stat">
-            <span className="ts-val">{totalReplies > 0 ? totalReplies : <span className="dim">–</span>}</span>
+            <span className="ts-val">{totalReplies > 0 ? totalReplies : <span className="dim">-</span>}</span>
             <small>{t.msgs}</small>
           </div>
           <div className="team-stat">
             <span className={`ts-val ${totalReplies > 0 && perfPct > 0 ? 'green' : 'dim'}`}>
-              {totalReplies > 0 ? `${perfPct.toFixed(0)}%` : '–'}
+              {totalReplies > 0 ? `${perfPct.toFixed(0)}%` : '-'}
             </span>
             <small>{t.perf}</small>
           </div>
           <div className="team-stat">
-            <span className="ts-val">{avgRespS > 0 ? `${avgRespS.toFixed(0)}s` : <span className="dim">–</span>}</span>
+            <span className="ts-val">{avgRespS > 0 ? `${avgRespS.toFixed(0)}s` : <span className="dim">-</span>}</span>
             <small>{t.avg}</small>
           </div>
           <div className="team-stat">
             <span className={`ts-val ${totalReplies > 0 ? 'green' : 'dim'}`}>
-              {totalReplies > 0 ? fmtTime(timeSavedMins) : '–'}
+              {totalReplies > 0 ? fmtTime(timeSavedMins) : '-'}
             </span>
             <small>{t.saved}</small>
           </div>
           <div className="team-stat">
             <span className={`ts-val ${memberSavings != null && memberSavings > 0 ? 'green' : 'dim'}`}>
-              {memberSavings != null ? fmtC(memberSavings) : '–'}
+              {memberSavings != null ? fmtC(memberSavings) : '-'}
             </span>
             <small>{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</small>
           </div>
@@ -1934,6 +1940,7 @@ export function DashboardPage() {
       </div>
     )
   }
+
 
   // ── Render ────────────────────────────────────────────────────────────────
   const brandHex = normalizeHexColor(client?.primary_brand_color) ?? DEFAULT_BRAND_HEX
@@ -2000,6 +2007,10 @@ export function DashboardPage() {
           <a className="logo" href="#">
             <img src="/logos/arkflow-logo.svg" alt="Arkflow" className="logo-img" />
           </a>
+          <div className="header-tabs">
+            <button type="button" className={`hdr-tab ${activeTab === 'team' ? 'active' : ''}`} onClick={() => setActiveTab('team')}>{t.yourTeam}</button>
+            <button type="button" className={`hdr-tab ${activeTab === 'opportunities' ? 'active' : ''}`} onClick={() => setActiveTab('opportunities')}>{t.opportunities}</button>
+          </div>
           <div className="header-r">
             <div className="header-ctls">
               <select
@@ -2104,10 +2115,29 @@ export function DashboardPage() {
             Autocares Julia
           </h1>
 
-          <div className="kpis">
+          {activeTab === 'opportunities' && (
+            <div className="opp-intro">
+              <p>
+                {(() => {
+                const nTasks = auditGroups.length
+                const uniqueCities = new Set(
+                  auditGroups.flatMap((g) =>
+                    g.rows.map((a) => splitTaskCity((a.automation_name_en ?? a.automation_name ?? '').toString()).city).filter(Boolean)
+                  )
+                )
+                const nLocs = uniqueCities.size || auditGroups.reduce((s, g) => s + g.rows.length, 0)
+                return lang === 'ES'
+                  ? `${nTasks} oportunidad${nTasks !== 1 ? 'es' : ''} × ${nLocs} ubicacion${nLocs !== 1 ? 'es' : ''}. Los datos de benchmark se basan en una muestra de 5 semanas de operativa manual. El potencial de ahorro mensual se calcula como: ejecuciones/mes estimadas × coste manual por tarea − coste mensual de la automatización.`
+                  : `${nTasks} opportunit${nTasks !== 1 ? 'ies' : 'y'} × ${nLocs} location${nLocs !== 1 ? 's' : ''}. Benchmark data is based on a 5-week sample of manual operations. Monthly savings potential = estimated runs/month × manual cost per task − automation monthly cost.`
+              })()}
+              </p>
+            </div>
+          )}
+
+          {activeTab === 'team' && <div className="kpis">
             <div className="kpi">
               <div className="kpi-val green" id="kAvgResp">
-                {kpis.avgRespS > 0 ? `${kpis.avgRespS.toFixed(0)}s` : '–'}
+                {kpis.avgRespS > 0 ? `${kpis.avgRespS.toFixed(0)}s` : '-'}
               </div>
               <div className="kpi-lbl">{t.avgResponseTime}</div>
             </div>
@@ -2119,13 +2149,13 @@ export function DashboardPage() {
             </div>
             <div className="kpi">
               <div className={`kpi-val ${clientTotalSavings != null && clientTotalSavings > 0 ? 'green' : ''}`} id="kSavings">
-                {clientTotalSavings != null ? fmtC(clientTotalSavings) : '–'}
+                {clientTotalSavings != null ? fmtC(clientTotalSavings) : '-'}
               </div>
               <div className="kpi-lbl">{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</div>
             </div>
             <div className="kpi highlight">
               <div className="kpi-val" id="kTotalConvos">
-                {totalThreads != null ? totalThreads : '–'}
+                {totalThreads != null ? totalThreads : '-'}
               </div>
               <div className="kpi-lbl">{t.totalConversations}</div>
             </div>
@@ -2133,45 +2163,47 @@ export function DashboardPage() {
               <div className="kpi-val" id="kFinishedPct">
                 {totalThreads != null && totalThreads > 0
                   ? `${finishedPct.toFixed(0)}% (${completedThreads ?? 0}/${totalThreads})`
-                  : '–'}
+                  : '-'}
               </div>
               <div className="kpi-lbl">{t.completed}</div>
             </div>
-          </div>
+          </div>}
 
-          {brandSaveError ? (
+          {activeTab === 'team' && brandSaveError ? (
             <div className="error-msg" style={{ marginTop: 12 }}>
               Failed to save brand color to DB. {brandSaveError}
             </div>
           ) : null}
 
-          <button className={`how-btn ${howOpen ? 'open' : ''}`} onClick={() => setHowOpen((v) => !v)}>
-            {t.howCalculated}
-          </button>
-          <div className={`how-panel ${howOpen ? 'open' : ''}`}>
-            <div className="how-grid">
-              <div className="how-item">
-                <div className="how-name">{t.avgResponseTime}</div>
-                <div className="how-desc">{t.avgRespHow}</div>
-              </div>
-              <div className="how-item">
-                <div className="how-name">{t.timeSaved}</div>
-                <div className="how-desc">{t.timeSavedHow}</div>
-              </div>
-              <div className="how-item">
-                <div className="how-name">{t.totalSavings}</div>
-                <div className="how-desc" dangerouslySetInnerHTML={{ __html: t.totalSavingsHow }} />
-              </div>
-              <div className="how-item">
-                <div className="how-name">{t.totalConversations}</div>
-                <div className="how-desc">{t.totalConversationsHow}</div>
-              </div>
-              <div className="how-item">
-                <div className="how-name">{t.pctFinished}</div>
-                <div className="how-desc">{t.finishedHow}</div>
+          {activeTab === 'team' && <>
+            <button className={`how-btn ${howOpen ? 'open' : ''}`} onClick={() => setHowOpen((v) => !v)}>
+              {t.howCalculated}
+            </button>
+            <div className={`how-panel ${howOpen ? 'open' : ''}`}>
+              <div className="how-grid">
+                <div className="how-item">
+                  <div className="how-name">{t.avgResponseTime}</div>
+                  <div className="how-desc">{t.avgRespHow}</div>
+                </div>
+                <div className="how-item">
+                  <div className="how-name">{t.timeSaved}</div>
+                  <div className="how-desc">{t.timeSavedHow}</div>
+                </div>
+                <div className="how-item">
+                  <div className="how-name">{t.totalSavings}</div>
+                  <div className="how-desc" dangerouslySetInnerHTML={{ __html: t.totalSavingsHow }} />
+                </div>
+                <div className="how-item">
+                  <div className="how-name">{t.totalConversations}</div>
+                  <div className="how-desc">{t.totalConversationsHow}</div>
+                </div>
+                <div className="how-item">
+                  <div className="how-name">{t.pctFinished}</div>
+                  <div className="how-desc">{t.finishedHow}</div>
+                </div>
               </div>
             </div>
-          </div>
+          </>}
         </div>
       </section>
 
@@ -2183,47 +2215,37 @@ export function DashboardPage() {
             <div className="error-msg" style={{ background: 'var(--red-bg)', color: 'var(--red)' }}>
               No rows are visible from Supabase. This usually means Row Level Security is enabled without a SELECT policy for the current access mode (anon).
             </div>
+          ) : activeTab === 'opportunities' ? (
+            <div className="team-list">
+              {discoveryAutos.length === 0 && !loading ? (
+                <div className="tab-empty-state">
+                  <div className="tab-empty-icon">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                  </div>
+                  <div className="tab-empty-title">{lang === 'EN' ? 'No opportunities yet' : 'Sin oportunidades aún'}</div>
+                  <div className="tab-empty-desc">{lang === 'EN' ? 'Automations in discovery status will appear here.' : 'Las automatizaciones en estado discovery aparecerán aquí.'}</div>
+                </div>
+              ) : (
+                <>
+                  <div className="section-head">
+                    <div className="section-label">{t.opportunities}</div>
+                    <div className="section-count">
+                      {auditGroups.length} {lang === 'EN' ? 'opportunities' : 'oportunidades'} · {discoveryAutos.length} {lang === 'EN' ? 'automations' : 'automatizaciones'}
+                    </div>
+                  </div>
+                  <div className="auto-list">
+                    {auditGroups.map((g) => renderAuditGroupRow(g))}
+                  </div>
+                </>
+              )}
+            </div>
           ) : (
             <div className="team-list">
               {!loading && missingAssignedIds.length > 0 && (
                 <div className="error-msg" style={{ background: 'var(--red-bg)', color: 'var(--red)' }}>
-                  Missing automations in DB for this client: {missingAssignedIds.join(', ')}. Check you’re pointing at the expected Supabase project and RLS allows selecting `automations`.
-                </div>
-              )}
-
-              {/* Audit — opportunities for automation (Discovery) */}
-              {!loading && discoveryAutos.length > 0 && (
-                <div className={`team-member audit-member ${auditOpen ? 'open' : ''}`}>
-                  <div className="team-member-header" onClick={() => setAuditOpen((v) => !v)}>
-                    <div
-                      className="team-member-avatar"
-                      style={{ background: 'var(--card)', color: 'var(--text3)' }}
-                    >
-                      A
-                    </div>
-                    <div className="team-member-info">
-                      <div className="team-member-name" style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text3)' }}>
-                        {lang === 'ES' ? 'Auditoría - Oportunidades de automatización' : 'Audit - Opportunities for Automation'}
-                      </div>
-                      <div className="team-member-role">
-                        {lang === 'ES'
-                          ? 'Automatizaciones en discovery (candidatas) · basado en 5 semanas de datos'
-                          : 'Automations in discovery (candidates) · based on 5 weeks of data'}
-                      </div>
-                    </div>
-                    <div className="team-stat">
-                      <span className="ts-val">{auditGroups.length}</span>
-                      <small>{lang === 'ES' ? 'Oportunidades' : 'Opportunities'}</small>
-                    </div>
-                    {chevronSvg()}
-                  </div>
-                  <div className="team-member-body">
-                    <div className="team-member-skills">
-                      <div className="auto-list">
-                        {auditGroups.map((g) => renderAuditGroupRow(g))}
-                      </div>
-                    </div>
-                  </div>
+                  Missing automations in DB for this client: {missingAssignedIds.join(', ')}. Check you're pointing at the expected Supabase project and RLS allows selecting `automations`.
                 </div>
               )}
 
@@ -2235,16 +2257,12 @@ export function DashboardPage() {
               </div>
 
               {TEAM_MEMBERS.map((member) => renderTeamMember(member))}
+
               {/* Unassigned automations catch-all */}
               {!loading && unassignedAutos.length > 0 && (
                 <div className="team-member open">
                   <div className="team-member-header" style={{ cursor: 'default' }}>
-                    <div
-                      className="team-member-avatar"
-                      style={{ background: 'var(--card)', color: 'var(--text3)' }}
-                    >
-                      –
-                    </div>
+                    <div className="team-member-avatar" style={{ background: 'var(--card)', color: 'var(--text3)' }}>-</div>
                     <div className="team-member-info">
                       <div className="team-member-name" style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text3)' }}>
                         {lang === 'EN' ? 'Unassigned' : 'Sin asignar'}
