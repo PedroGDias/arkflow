@@ -899,6 +899,9 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .city-row-summary .auto-stat { width: 72px; font-size: 13px; }
 .city-row-summary .auto-stat small { font-size: 9px; }

@@ -253,7 +253,7 @@ export function DashboardPage() {
         avgResponseTime: 'Avg Response Time',
         vsManual: 'vs MANUAL',
         timeSaved: 'Time Saved',
-        timeSavedHow: 'Total staff time recovered based on the agreed manual handling time per request (5 min), multiplied by total replies processed.',
+        timeSavedHow: 'Total staff time recovered based on the agreed manual handling time per task (set per automation), multiplied by total runs processed.',
         avgRespHow: "Average response time of the automation's messages in production, compared to a 5 minute manual baseline.",
         totalSavings: 'Costs Saved',
         totalSavingsHow: '<b>Actual runs × manual cost per run</b> (€/hour × min/task ÷ 60) minus <b>automation cost × months active</b> (since first run). Only live automations with cost fields filled in are counted.',
@@ -298,7 +298,7 @@ export function DashboardPage() {
         vsManual: 'vs MANUAL',
         timeSaved: 'Tiempo ahorrado',
         timeSavedHow:
-          'Tiempo total recuperado según el tiempo manual acordado por solicitud (5 min), multiplicado por el total de respuestas procesadas.',
+          'Tiempo total recuperado según el tiempo manual acordado por tarea (configurado por automatización), multiplicado por el total de ejecuciones procesadas.',
         avgRespHow: 'Tiempo medio de respuesta de los mensajes en producción, comparado con una línea base manual de 5 minutos.',
         totalSavings: 'Costes ahorrados',
         totalSavingsHow: '<b>Ejecuciones reales × coste manual por ejecución</b> (€/hora × min/tarea ÷ 60) menos <b>coste de automatización × meses activos</b> (desde la primera ejecución). Solo se cuentan automatizaciones live con los campos de coste completados.',
@@ -547,10 +547,13 @@ export function DashboardPage() {
 
   const kpis = useMemo(() => {
     const avgRespS = totalRuns > 0 ? runs.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalRuns : 0
-    const timeSavedMins = totalRuns * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN
+    const timeSavedMins = Object.values(byAuto).reduce((s, a) => {
+      const mins = coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN
+      return s + a.runs.length * mins
+    }, 0)
     const speedPct = avgRespS > 0 ? ((COST_ASSUMPTIONS.MANUAL_RESPONSE_S - avgRespS) / COST_ASSUMPTIONS.MANUAL_RESPONSE_S) * 100 : 0
     return { avgRespS, timeSavedMins, speedPct }
-  }, [runs, totalRuns])
+  }, [runs, totalRuns, byAuto])
 
   // Total estimated savings for a single live automation based on actual run history:
   //   runs × manual_cost_per_run  −  auto_monthly_cost × months_active
@@ -616,7 +619,7 @@ export function DashboardPage() {
 
   async function saveAutomationCosts(
     automationId: number,
-    patch: Partial<Pick<Automation, 'manual_execution_time_min' | 'manual_hourly_cost' | 'auto_monthly_cost'>>,
+    patch: Partial<Pick<Automation, 'manual_execution_time_min' | 'manual_hourly_cost' | 'auto_monthly_cost' | 'manual_sample_size' | 'manual_avg_response_time'>>,
   ) {
     if (!supabase) return
     const sb = supabase
@@ -625,14 +628,14 @@ export function DashboardPage() {
       .from('automations')
       .update(patch)
       .eq('id', automationId)
-      .select('id,manual_execution_time_min,manual_hourly_cost,auto_monthly_cost')
+      .select('id,manual_execution_time_min,manual_hourly_cost,auto_monthly_cost,manual_sample_size,manual_avg_response_time')
     console.log('[saveAutomationCosts]', { automationId, patch, data: res.data, error: res.error })
     if (res.error) void load()
   }
 
   async function saveAutomationCostsGroup(
     automationIds: number[],
-    patch: Partial<Pick<Automation, 'manual_execution_time_min' | 'manual_hourly_cost' | 'auto_monthly_cost'>>,
+    patch: Partial<Pick<Automation, 'manual_execution_time_min' | 'manual_hourly_cost' | 'auto_monthly_cost' | 'manual_sample_size' | 'manual_avg_response_time'>>,
   ) {
     if (!supabase) return
     if (automationIds.length === 0) return
@@ -643,7 +646,7 @@ export function DashboardPage() {
       .from('automations')
       .update(patch)
       .in('id', automationIds)
-      .select('id,manual_execution_time_min,manual_hourly_cost,auto_monthly_cost')
+      .select('id,manual_execution_time_min,manual_hourly_cost,auto_monthly_cost,manual_sample_size,manual_avg_response_time')
     console.log('[saveAutomationCostsGroup]', { automationIds, patch, data: res.data, error: res.error })
     if (res.error) void load()
   }
@@ -665,7 +668,7 @@ export function DashboardPage() {
     return (
       <div className="detail-strip" style={{ marginBottom: 12 }}>
         <div className="strip-head">
-          {lang === 'ES' ? 'Modelo de coste' : 'Cost model'}
+          {lang === 'ES' ? 'Modelo ROI' : 'ROI model'}
           {opts.sampleWeeksLabel ? <span style={{ marginLeft: 10, color: 'var(--text4)' }}>({opts.sampleWeeksLabel})</span> : null}
         </div>
         <div className="strip-nums three-wide">
@@ -841,7 +844,8 @@ export function DashboardPage() {
       }
       return last10DayKeys.map((k) => m[k] ?? 0)
     })()
-    const savedMinsByDayL10D = repliesByDayL10D.map((cnt) => cnt * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN)
+    const minsPerRun = coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN
+    const savedMinsByDayL10D = repliesByDayL10D.map((cnt) => cnt * minsPerRun)
     const customersByDayL10D = last10DayKeys.map((k) => (threadDayCountsByAuto?.[a.id]?.[k] ?? 0))
     const maxRepliesL10D = Math.max(...repliesByDayL10D, 1)
     const maxSavedMinsL10D = Math.max(...savedMinsByDayL10D, 1)
@@ -911,7 +915,7 @@ export function DashboardPage() {
           </div>
           <div className="auto-stat good">
             <small>{t.saved}</small>
-            <span className="val">{fmtTime(r.length * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN)}</span>
+            <span className="val">{fmtTime(r.length * (coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN))}</span>
           </div>
           <div className="auto-stat good">
             <small>
@@ -927,18 +931,21 @@ export function DashboardPage() {
         </div>
 
         <div className="auto-detail">
-          {/* Compact cost model + benchmark — single row */}
+          {/* Compact ROI model + benchmark — single row */}
           {(() => {
             const manualMins = coerceFiniteNumber(a.manual_execution_time_min)
             const manualHourly = coerceFiniteNumber(a.manual_hourly_cost)
             const autoMonthly = coerceFiniteNumber(a.auto_monthly_cost)
-            const monthlyRuns = monthlyRunsEstimate != null && monthlyRunsEstimate > 0 ? monthlyRunsEstimate : null
             const manualPerRun = manualMins != null && manualHourly != null ? (manualHourly * manualMins) / 60 : null
-            const manualMonthly = manualPerRun != null && monthlyRuns != null ? manualPerRun * monthlyRuns : null
+            const actualMonthsActive = r.length > 0
+              ? Math.max((Date.now() - new Date(r[r.length - 1].created_at).getTime()) / (1000 * 60 * 60 * 24 * 30.44), 1 / 30.44)
+              : null
+            const actualRunsPerMonth = actualMonthsActive != null ? r.length / actualMonthsActive : null
+            const manualMonthly = manualPerRun != null && actualRunsPerMonth != null ? manualPerRun * actualRunsPerMonth : null
             const totalSavings = autoTotalSavings(a)
             return (
               <div className="detail-strip cost-row-strip">
-                <div className="strip-head" style={{ background: hexToRgba(brandHex, 0.10) }}>{lang === 'ES' ? 'Modelo de coste' : 'Cost model'}</div>
+                <div className="strip-head" style={{ background: hexToRgba(brandHex, 0.10) }}>{lang === 'ES' ? 'Modelo ROI' : 'ROI model'}</div>
                 <div className="cost-row-nums">
                   <div className="cost-row-cell cost-row-bm">
                     <small>{lang === 'ES' ? 'Benchmark manual · 5 semanas' : 'Manual benchmark · 5 weeks'}</small>
@@ -995,16 +1002,12 @@ export function DashboardPage() {
                     />
                   </div>
                   <div className="cost-row-cell">
-                    <small>{lang === 'ES' ? 'Tareas/mes (est.)' : 'Tasks/mo (est.)'}</small>
-                    <span className="crv">{monthlyRuns != null ? Math.round(monthlyRuns).toLocaleString() : '–'}</span>
+                    <small>{lang === 'ES' ? 'Ejecuciones' : 'Runs'}</small>
+                    <span className="crv">{r.length > 0 ? r.length.toLocaleString() : '–'}</span>
                   </div>
                   <div className="cost-row-cell">
-                    <small>{lang === 'ES' ? `Manual ${currencySym}/mes` : `Manual ${currencySym}/mo`}</small>
-                    <span className="crv">{fmtC(manualMonthly)}</span>
-                  </div>
-                  <div className="cost-row-cell">
-                    <small>{lang === 'ES' ? `Auto ${currencySym}/mes` : `Auto ${currencySym}/mo`}</small>
-                    <span className="crv">{fmtC(autoMonthly)}</span>
+                    <small>{lang === 'ES' ? `Manual total` : `Manual total`}</small>
+                    <span className="crv">{fmtC(manualPerRun != null ? r.length * manualPerRun : null)}</span>
                   </div>
                   <div className="cost-row-cell">
                     <small>{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</small>
@@ -1181,6 +1184,7 @@ export function DashboardPage() {
     const manualMinsCommon = commonFiniteNumberOrNull(group.rows, 'manual_execution_time_min')
     const manualHourlyCommon = commonFiniteNumberOrNull(group.rows, 'manual_hourly_cost')
     const autoMonthlySum = group.rows.reduce((s, a) => s + (coerceFiniteNumber(a.auto_monthly_cost) ?? 0), 0)
+    const avgRespCommon = commonFiniteNumberOrNull(group.rows, 'manual_avg_response_time')
 
     const sampleWeeks = 5
     const weeksPerMonth = 52 / 12 // 4.333...
@@ -1231,11 +1235,43 @@ export function DashboardPage() {
               <div className="audit-group-cols">
                 <div className="auto-stat audit-stat">
                   <small>{lang === 'ES' ? 'Muestra (msgs)' : 'Sample (msgs)'}</small>
-                  <span className="val">{sampleSum > 0 ? Math.round(sampleSum).toLocaleString() : '–'}</span>
+                  <span className="val">
+                    <input
+                      className="audit-input"
+                      type="number"
+                      min={0}
+                      step={1}
+                      defaultValue={sampleSum > 0 ? Math.round(sampleSum) : ''}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={(e) => {
+                        const v = e.currentTarget.value.trim()
+                        const n = v === '' ? null : Number(v)
+                        if (!Number.isFinite(n as number)) return
+                        const perCity = (n as number) / Math.max(ids.length, 1)
+                        void saveAutomationCostsGroup(ids, { manual_sample_size: perCity })
+                      }}
+                    />
+                  </span>
                 </div>
                 <div className="auto-stat audit-stat hl">
-                  <small>{lang === 'ES' ? 'Resp. media' : 'Avg resp'}</small>
-                  <span className="val">{avgRespWeighted != null ? fmtDurationS(avgRespWeighted) : '–'}</span>
+                  <small>{lang === 'ES' ? 'Resp. media (s)' : 'Avg resp (s)'}</small>
+                  <span className="val">
+                    <input
+                      className="audit-input"
+                      type="number"
+                      min={0}
+                      step={1}
+                      defaultValue={avgRespCommon ?? ''}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={(e) => {
+                        const v = e.currentTarget.value.trim()
+                        const n = v === '' ? null : Number(v)
+                        void saveAutomationCostsGroup(ids, {
+                          manual_avg_response_time: Number.isFinite(n as number) ? (n as number) : null,
+                        })
+                      }}
+                    />
+                  </span>
                 </div>
                 <div className="auto-stat audit-stat">
                   <small>{lang === 'ES' ? 'Min/tarea' : 'Min/task'}</small>
@@ -1377,11 +1413,43 @@ export function DashboardPage() {
                     <div className="audit-city-metrics">
                       <div className="audit-city-metric">
                         <div className="audit-city-lbl">{lang === 'ES' ? 'Mensajes' : 'Messages'}</div>
-                        <div className="audit-city-val">{sampleSize != null ? Math.round(sampleSize).toLocaleString() : '–'}</div>
+                        <div className="audit-city-val">
+                          <input
+                            className="audit-input"
+                            type="number"
+                            min={0}
+                            step={1}
+                            defaultValue={sampleSize != null ? Math.round(sampleSize) : ''}
+                            onClick={(e) => e.stopPropagation()}
+                            onBlur={(e) => {
+                              const v = e.currentTarget.value.trim()
+                              const n = v === '' ? null : Number(v)
+                              void saveAutomationCosts(a.id, {
+                                manual_sample_size: Number.isFinite(n as number) ? (n as number) : null,
+                              })
+                            }}
+                          />
+                        </div>
                       </div>
                       <div className="audit-city-metric">
-                        <div className="audit-city-lbl">{lang === 'ES' ? 'T. resp. medio' : 'Avg resp time'}</div>
-                        <div className="audit-city-val">{manualAvgResp != null ? fmtDurationS(manualAvgResp) : '–'}</div>
+                        <div className="audit-city-lbl">{lang === 'ES' ? 'T. resp. medio (s)' : 'Avg resp time (s)'}</div>
+                        <div className="audit-city-val">
+                          <input
+                            className="audit-input"
+                            type="number"
+                            min={0}
+                            step={1}
+                            defaultValue={manualAvgResp ?? ''}
+                            onClick={(e) => e.stopPropagation()}
+                            onBlur={(e) => {
+                              const v = e.currentTarget.value.trim()
+                              const n = v === '' ? null : Number(v)
+                              void saveAutomationCosts(a.id, {
+                                manual_avg_response_time: Number.isFinite(n as number) ? (n as number) : null,
+                              })
+                            }}
+                          />
+                        </div>
                       </div>
                       <div className="audit-city-metric">
                         <div className="audit-city-lbl">{lang === 'ES' ? 'Hilos' : 'Threads'}</div>
@@ -1416,7 +1484,7 @@ export function DashboardPage() {
     const allRuns = groupAutos.flatMap((a) => a.runs)
     const totalRuns = allRuns.length
     const avgRespS = totalRuns > 0 ? allRuns.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalRuns : 0
-    const timeSavedMins = totalRuns * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN
+    const timeSavedMins = groupAutos.reduce((s, a) => s + a.runs.length * (coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN), 0)
     const lastCreatedAt = allRuns.length > 0 ? allRuns[0].created_at : null
 
     const hasLive = groupAutos.some((a) => (a.status ?? '').toString().toLowerCase() === 'live')
@@ -1437,9 +1505,12 @@ export function DashboardPage() {
       if (denom <= 0) return null
       return rows.reduce((s, r) => s + r.n * (r.avg ?? 0), 0) / denom
     })()
-    const monthlyRunsEstimate = sampleSum > 0 ? (sampleSum / 5) * (52 / 12) : null
     const manualPerRun = manualMinsCommon != null && manualHourlyCommon != null ? (manualHourlyCommon * manualMinsCommon) / 60 : null
-    const manualMonthly = manualPerRun != null && monthlyRunsEstimate != null ? manualPerRun * monthlyRunsEstimate : null
+    const actualGroupMonthsActive = allRuns.length > 0
+      ? Math.max((Date.now() - new Date(allRuns[allRuns.length - 1].created_at).getTime()) / (1000 * 60 * 60 * 24 * 30.44), 1 / 30.44)
+      : null
+    const actualGroupRunsPerMonth = actualGroupMonthsActive != null ? allRuns.length / actualGroupMonthsActive : null
+    const manualMonthly = manualPerRun != null && actualGroupRunsPerMonth != null ? manualPerRun * actualGroupRunsPerMonth : null
 
     let groupTotalSavings: number | null = null
     for (const a of groupAutos) {
@@ -1499,7 +1570,7 @@ export function DashboardPage() {
         </div>
 
         <div className="auto-detail">
-          {/* Two side-by-side panels: benchmark + cost model */}
+          {/* Two side-by-side panels: benchmark + ROI model */}
           <div className="cost-panels">
             {/* Panel 1 – Manual performance benchmark */}
             <div className="detail-strip benchmark">
@@ -1518,10 +1589,10 @@ export function DashboardPage() {
               </div>
             </div>
 
-            {/* Panel 2 – Cost model inputs + computed */}
+            {/* Panel 2 – ROI model inputs + computed */}
             <div className="detail-strip">
               <div className="strip-head" style={{ background: hexToRgba(brandHex, 0.10) }}>
-                {lang === 'ES' ? 'Modelo de coste' : 'Cost model'}
+                {lang === 'ES' ? 'Modelo ROI' : 'ROI model'}
               </div>
               <div className="cost-row-nums">
                 <div className="cost-row-cell">
@@ -1569,16 +1640,12 @@ export function DashboardPage() {
                   />
                 </div>
                 <div className="cost-row-cell">
-                  <small>{lang === 'ES' ? 'Tareas/mes (est.)' : 'Tasks/mo (est.)'}</small>
-                  <span className="crv">{monthlyRunsEstimate != null ? Math.round(monthlyRunsEstimate).toLocaleString() : '–'}</span>
+                  <small>{lang === 'ES' ? 'Ejecuciones' : 'Runs'}</small>
+                  <span className="crv">{totalRuns > 0 ? totalRuns.toLocaleString() : '–'}</span>
                 </div>
                 <div className="cost-row-cell">
-                  <small>{lang === 'ES' ? `Manual ${currencySym}/mes` : `Manual ${currencySym}/mo`}</small>
-                  <span className="crv">{fmtC(manualMonthly)}</span>
-                </div>
-                <div className="cost-row-cell">
-                  <small>{lang === 'ES' ? `Auto ${currencySym}/mes` : `Auto ${currencySym}/mo`}</small>
-                  <span className="crv">{fmtC(autoMonthlySum > 0 ? autoMonthlySum : null)}</span>
+                  <small>Manual total</small>
+                  <span className="crv">{fmtC(manualPerRun != null ? totalRuns * manualPerRun : null)}</span>
                 </div>
                 <div className="cost-row-cell">
                   <small>{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</small>
@@ -1625,11 +1692,18 @@ export function DashboardPage() {
                   })
                 })()
 
-                const citySavedMinsByDayL10D = cityRepliesByDayL10D.map((cnt) => cnt * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN)
+                const cityMinsPerRun = coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN
+                const citySavedMinsByDayL10D = cityRepliesByDayL10D.map((cnt) => cnt * cityMinsPerRun)
 
                 const maxCityRepliesL10D = Math.max(...cityRepliesByDayL10D, 1)
                 const maxCityAvgRespL10D = Math.max(...cityAvgRespByDayL10D, 1)
                 const maxCitySavedMinsL10D = Math.max(...citySavedMinsByDayL10D, 1)
+
+                const cityStatusLower = (a.status ?? '').toString().toLowerCase()
+                const cityIsLive = cityStatusLower === 'live'
+                const cityIsTesting = cityStatusLower === 'testing'
+                const cityStatusClass = cityIsLive ? 'live' : cityIsTesting ? 'testing' : 'offline'
+                const cityStatusLabel = cityIsLive ? t.activeStatus : cityIsTesting ? t.testingStatus : t.inactiveStatus
 
                 return (
                   <div key={a.id} className={`city-row ${isCityOpen ? 'open' : ''}`}>
@@ -1642,7 +1716,13 @@ export function DashboardPage() {
                         return next
                       })}
                     >
-                      <div className="city-row-name">{city ?? displayAutomationName(a)}</div>
+                      <div className="city-row-name">
+                        {city ?? displayAutomationName(a)}
+                        <span className={`row-live ${cityStatusClass}`}>
+                          <span className={`live-dot ${cityStatusClass}`}></span>
+                          {cityStatusLabel}
+                        </span>
+                      </div>
                       <div className="auto-stat">
                         <small>{t.msgs}</small>
                         <span className="val">{cityRuns > 0 ? cityRuns : '–'}</span>
@@ -1653,7 +1733,7 @@ export function DashboardPage() {
                       </div>
                       <div className="auto-stat good">
                         <small>{t.saved}</small>
-                        <span className="val">{cityRuns > 0 ? fmtTime(cityRuns * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN) : '–'}</span>
+                        <span className="val">{cityRuns > 0 ? fmtTime(cityRuns * (coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN)) : '–'}</span>
                       </div>
                       <div className="auto-stat good">
                         <small>{lang === 'ES' ? 'Costes ahorra.' : 'Costs saved'}</small>
@@ -1740,7 +1820,7 @@ export function DashboardPage() {
     const memberRuns = memberAutos.flatMap((a) => a.runs)
     const totalReplies = memberRuns.length
     const avgRespS = totalReplies > 0 ? memberRuns.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalReplies : 0
-    const timeSavedMins = totalReplies * COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN
+    const timeSavedMins = memberAutos.reduce((s, a) => s + a.runs.length * (coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN), 0)
     const perfPct = avgRespS > 0 ? ((COST_ASSUMPTIONS.MANUAL_RESPONSE_S - avgRespS) / COST_ASSUMPTIONS.MANUAL_RESPONSE_S) * 100 : 0
     const memberSavings = (() => {
       let total: number | null = null
