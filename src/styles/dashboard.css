@@ -449,6 +449,36 @@ body {
   padding: 10px 16px; background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
+
+/* Collapsible inputs card (built/live) */
+.detail-strip.inputs-card {
+  background: color-mix(in oklab, var(--brand) 6%, var(--white));
+  border-color: color-mix(in oklab, var(--brand) 20%, var(--border));
+}
+.detail-strip.inputs-card .strip-head {
+  background: color-mix(in oklab, var(--brand) 10%, var(--bg));
+  color: color-mix(in oklab, var(--text3) 60%, var(--brand));
+}
+.strip-head-btn {
+  width: 100%;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.strip-head-btn:hover { filter: brightness(0.98); }
+.strip-head-btn .inputs-chevron .chevron {
+  width: 18px;
+  height: 18px;
+  color: var(--text3);
+  transition: transform .2s;
+}
+.detail-strip.inputs-card.open .strip-head-btn .inputs-chevron .chevron { transform: rotate(180deg); }
+.inputs-body { display: none; }
+.detail-strip.inputs-card.open .inputs-body { display: block; }
 .strip-nums { display: flex; gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); }
 .strip-nums.four { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; }
 .strip-nums.three-wide { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 1px; }

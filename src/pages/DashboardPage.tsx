@@ -239,6 +239,9 @@ export function DashboardPage() {
   const [howOpen, setHowOpen] = useState(false)
   const [auditOpen, setAuditOpen] = useState(false)
   const [openAuditIds, setOpenAuditIds] = useState<Set<string>>(() => new Set())
+  // collapsible "Inputs (manual)" cards for built/live rows
+  const [openInputsGroupIds, setOpenInputsGroupIds] = useState<Set<string>>(() => new Set())
+  const [openInputsCityIds, setOpenInputsCityIds] = useState<Set<number>>(() => new Set())
   const [activeTab, setActiveTab] = useState<'team' | 'opportunities'>('team')
 
   const rowEls = useRef(new Map<number, HTMLDivElement>())
@@ -257,7 +260,7 @@ export function DashboardPage() {
         timeSavedHow: 'Total staff time recovered based on the agreed manual handling time per task (set per automation), multiplied by total runs processed.',
         avgRespHow: "Average response time of the automation's messages in production, compared to a 5 minute manual baseline.",
         totalSavings: 'Costs Saved',
-        totalSavingsHow: '<b>Actual runs × manual cost per run</b> (€/hour × min/task ÷ 60) minus <b>automation cost × months active</b> (since first run). Only live automations with cost fields filled in are counted.',
+        totalSavingsHow: '<b>Actual time saved × manual hourly cost</b> (hours saved = runs × min/task ÷ 60). Only live automations with cost fields filled in are counted.',
         totalConversations: 'Customers',
         totalConversationsHow: 'Unique customer threads handled end-to-end by the automation across all live skills.',
         pctFinished: '% Finished',
@@ -304,7 +307,7 @@ export function DashboardPage() {
           'Tiempo total recuperado según el tiempo manual acordado por tarea (configurado por automatización), multiplicado por el total de ejecuciones procesadas.',
         avgRespHow: 'Tiempo medio de respuesta de los mensajes en producción, comparado con una línea base manual de 5 minutos.',
         totalSavings: 'Costes ahorrados',
-        totalSavingsHow: '<b>Ejecuciones reales × coste manual por ejecución</b> (€/hora × min/tarea ÷ 60) menos <b>coste de automatización × meses activos</b> (desde la primera ejecución). Solo se cuentan automatizaciones live con los campos de coste completados.',
+        totalSavingsHow: '<b>Tiempo real ahorrado × coste manual por hora</b> (horas ahorradas = ejecuciones × min/tarea ÷ 60). Solo se cuentan automatizaciones live con los campos de coste completados.',
         totalConversations: 'Clientes',
         totalConversationsHow: 'Hilos de clientes gestionados de extremo a extremo por la automatización en todas las skills activas.',
         pctFinished: '% finalizadas',
@@ -561,22 +564,14 @@ export function DashboardPage() {
   }, [runs, totalRuns, byAuto])
 
   // Total estimated savings for a single live automation based on actual run history:
-  //   runs × manual_cost_per_run  −  auto_monthly_cost × months_active
-  // months_active = span from oldest run to today (proxy for how long it's been live)
+  //   timeSaved × manual_hourly_cost
+  // (timeSaved in hours = runs × manual_execution_time_min ÷ 60)
   const autoTotalSavings = (a: AutoWithRuns): number | null => {
     const mins = coerceFiniteNumber(a.manual_execution_time_min)
     const hourly = coerceFiniteNumber(a.manual_hourly_cost)
     if (mins == null || hourly == null) return null
     const manualCostPerRun = (hourly * mins) / 60
-    const totalManualSaved = a.runs.length * manualCostPerRun
-    const autoC = coerceFiniteNumber(a.auto_monthly_cost)
-    let totalAutoCost = 0
-    if (autoC != null && a.runs.length > 0) {
-      const oldestRun = a.runs[a.runs.length - 1]
-      const monthsActive = (Date.now() - new Date(oldestRun.created_at).getTime()) / (1000 * 60 * 60 * 24 * 30.44)
-      totalAutoCost = autoC * Math.max(monthsActive, 0)
-    }
-    return totalManualSaved - totalAutoCost
+    return a.runs.length * manualCostPerRun
   }
 
   // Client-level: sum total savings across all live (non-discovery) automations
@@ -1107,7 +1102,10 @@ export function DashboardPage() {
 
     const sampleWeeks = 5
     const weeksPerMonth = 52 / 12 // 4.333...
-    const monthlyRunsEstimate = sampleSum > 0 ? (sampleSum / sampleWeeks) * weeksPerMonth : null
+    // `manual_sample_size` is interpreted as manual audit *message count* (see migrations).
+    // For quote-style workflows we estimate "tasks" as request/response *pairs* ≈ messages / 2.
+    const samplePairsEstimate = sampleSum > 0 ? sampleSum / 2 : 0
+    const monthlyRunsEstimate = samplePairsEstimate > 0 ? (samplePairsEstimate / sampleWeeks) * weeksPerMonth : null
 
     const key = `audit:${group.task}`
     const isOpen = openAuditIds.has(key)
@@ -1400,6 +1398,13 @@ export function DashboardPage() {
   // ── Live automation group row (task with per-city breakdown) ─────────────
   function renderLiveGroupRow(groupKey: string, task: string, groupAutos: AutoWithRuns[]) {
     const ids = groupAutos.map((a) => a.id)
+    const allTypeIds = Object.values(byAuto)
+      .filter((a) => !isDiscoveryAutomation(a))
+      .filter((a) => {
+        const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
+        return splitTaskCity(base).task === task
+      })
+      .map((a) => a.id)
     const allRuns = groupAutos.flatMap((a) => a.runs)
     const totalRuns = allRuns.length
     const avgRespS = totalRuns > 0 ? allRuns.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalRuns : 0
@@ -1438,6 +1443,8 @@ export function DashboardPage() {
     }
 
     const isOpen = openLiveGroupIds.has(groupKey)
+    const canEditCommon = groupAutos.length > 0
+    const inputsOpen = openInputsGroupIds.has(groupKey)
 
     return (
       <div key={groupKey} className={`auto-row ${isOpen ? 'open' : ''}`}>
@@ -1489,6 +1496,99 @@ export function DashboardPage() {
         </div>
 
         <div className="auto-detail">
+          {/* Cost inputs (built/live) */}
+          <div className={`detail-strip inputs-card ${inputsOpen ? 'open' : ''}`} style={{ marginBottom: 12 }}>
+            <button
+              type="button"
+              className="strip-head strip-head-btn"
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpenInputsGroupIds((prev) => {
+                  const next = new Set(prev)
+                  if (next.has(groupKey)) next.delete(groupKey)
+                  else next.add(groupKey)
+                  return next
+                })
+              }}
+            >
+              <span>{lang === 'ES' ? 'Inputs (manual)' : 'Inputs (manual)'}</span>
+              <span className="inputs-chevron" aria-hidden="true">{chevronSvg()}</span>
+            </button>
+            <div className="inputs-body">
+              <div className="strip-nums three-wide">
+              <div className="strip-num">
+                <div className="sn-lbl">{lang === 'ES' ? 'Min/tarea' : 'Min/task'}</div>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  defaultValue={manualMinsCommon ?? (groupAutos.length === 1 ? (coerceFiniteNumber(groupAutos[0]?.manual_execution_time_min) ?? '') : '')}
+                  onClick={(e) => e.stopPropagation()}
+                  onBlur={(e) => {
+                    if (!canEditCommon) return
+                    const v = e.currentTarget.value.trim()
+                    const n = v === '' ? null : Number(v)
+                    const next = Number.isFinite(n as number) ? (n as number) : null
+                    void saveAutomationCostsGroup(allTypeIds.length > 0 ? allTypeIds : ids, { manual_execution_time_min: next })
+                  }}
+                  style={{
+                    width: '100%',
+                    fontFamily: 'var(--mono)',
+                    fontSize: 12,
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    padding: '8px 10px',
+                    marginTop: 6,
+                    background: 'var(--white)',
+                  }}
+                />
+              </div>
+
+              <div className="strip-num">
+                <div className="sn-lbl">{lang === 'ES' ? `${currencySym}/hora` : `${currencySym}/hour`}</div>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  defaultValue={manualHourlyCommon ?? (groupAutos.length === 1 ? (coerceFiniteNumber(groupAutos[0]?.manual_hourly_cost) ?? '') : '')}
+                  onClick={(e) => e.stopPropagation()}
+                  onBlur={(e) => {
+                    if (!canEditCommon) return
+                    const v = e.currentTarget.value.trim()
+                    const n = v === '' ? null : Number(v)
+                    const next = Number.isFinite(n as number) ? (n as number) : null
+                    void saveAutomationCostsGroup(allTypeIds.length > 0 ? allTypeIds : ids, { manual_hourly_cost: next })
+                  }}
+                  style={{
+                    width: '100%',
+                    fontFamily: 'var(--mono)',
+                    fontSize: 12,
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    padding: '8px 10px',
+                    marginTop: 6,
+                    background: 'var(--white)',
+                  }}
+                />
+              </div>
+
+              <div className="strip-num">
+                <div className="sn-lbl">{lang === 'ES' ? 'Coste manual / tarea' : 'Manual cost / task'}</div>
+                <div className="sn-val">
+                  {(() => {
+                    const mins =
+                      manualMinsCommon ?? (groupAutos.length === 1 ? coerceFiniteNumber(groupAutos[0]?.manual_execution_time_min) : null)
+                    const hourly =
+                      manualHourlyCommon ?? (groupAutos.length === 1 ? coerceFiniteNumber(groupAutos[0]?.manual_hourly_cost) : null)
+                    if (mins == null || hourly == null) return '-'
+                    return fmtC((hourly * mins) / 60)
+                  })()}
+                </div>
+              </div>
+              </div>
+            </div>
+          </div>
+
           {/* Per-city breakdown — accordion rows */}
           {groupAutos.length > 1 && (
             <div className="city-rows">
@@ -1581,6 +1681,95 @@ export function DashboardPage() {
                     </div>
 
                     <div className="city-row-detail">
+                      {(() => {
+                        const cityInputsOpen = openInputsCityIds.has(a.id)
+                        return (
+                          <div className={`detail-strip inputs-card ${cityInputsOpen ? 'open' : ''}`} style={{ marginBottom: 12 }}>
+                            <button
+                              type="button"
+                              className="strip-head strip-head-btn"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setOpenInputsCityIds((prev) => {
+                                  const next = new Set(prev)
+                                  if (next.has(a.id)) next.delete(a.id)
+                                  else next.add(a.id)
+                                  return next
+                                })
+                              }}
+                            >
+                              <span>{lang === 'ES' ? 'Inputs (manual)' : 'Inputs (manual)'}</span>
+                              <span className="inputs-chevron" aria-hidden="true">{chevronSvg()}</span>
+                            </button>
+                            <div className="inputs-body">
+                              <div className="strip-nums three-wide">
+                          <div className="strip-num">
+                            <div className="sn-lbl">{lang === 'ES' ? 'Min/tarea' : 'Min/task'}</div>
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.5}
+                              defaultValue={coerceFiniteNumber(a.manual_execution_time_min) ?? ''}
+                              onClick={(e) => e.stopPropagation()}
+                              onBlur={(e) => {
+                                const v = e.currentTarget.value.trim()
+                                const n = v === '' ? null : Number(v)
+                                void saveAutomationCosts(a.id, { manual_execution_time_min: Number.isFinite(n as number) ? (n as number) : null })
+                              }}
+                              style={{
+                                width: '100%',
+                                fontFamily: 'var(--mono)',
+                                fontSize: 12,
+                                border: '1px solid var(--border)',
+                                borderRadius: 8,
+                                padding: '8px 10px',
+                                marginTop: 6,
+                                background: 'var(--white)',
+                              }}
+                            />
+                          </div>
+                          <div className="strip-num">
+                            <div className="sn-lbl">{lang === 'ES' ? `${currencySym}/hora` : `${currencySym}/hour`}</div>
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              defaultValue={coerceFiniteNumber(a.manual_hourly_cost) ?? ''}
+                              onClick={(e) => e.stopPropagation()}
+                              onBlur={(e) => {
+                                const v = e.currentTarget.value.trim()
+                                const n = v === '' ? null : Number(v)
+                                void saveAutomationCosts(a.id, { manual_hourly_cost: Number.isFinite(n as number) ? (n as number) : null })
+                              }}
+                              style={{
+                                width: '100%',
+                                fontFamily: 'var(--mono)',
+                                fontSize: 12,
+                                border: '1px solid var(--border)',
+                                borderRadius: 8,
+                                padding: '8px 10px',
+                                marginTop: 6,
+                                background: 'var(--white)',
+                              }}
+                            />
+                          </div>
+                          <div className="strip-num">
+                            <div className="sn-lbl">{lang === 'ES' ? 'Coste manual / tarea' : 'Manual cost / task'}</div>
+                            <div className="sn-val">
+                              {(() => {
+                                const mins = coerceFiniteNumber(a.manual_execution_time_min)
+                                const hourly = coerceFiniteNumber(a.manual_hourly_cost)
+                                if (mins == null || hourly == null) return '-'
+                                return fmtC((hourly * mins) / 60)
+                              })()}
+                            </div>
+                          </div>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })()}
+
                       <div className="strip-charts city-charts">
                         <div className="strip-chart">
                           <div className="mini-chart-title">{t.repliesL10D}</div>
