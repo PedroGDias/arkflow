@@ -3,29 +3,30 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { env } from '../lib/env'
 import { supabase } from '../lib/supabase'
-import { TEAM_MEMBERS } from '../lib/team'
+import type { Client } from '../lib/types'
+import { clientLogoUrl } from '../lib/clientLogos'
 import '../styles/dashboard.css'
 
 type SkillStatus = { live: number; testing: number; offline: number }
-type WorkerStatus = { active: number; inactive: number }
+type WorkerStatus = { live: number; testing: number; offline: number }
 
 function statusLower(status: unknown) {
   return (status ?? '').toString().trim().toLowerCase()
 }
 
-const CLIENTS = [
-  {
-    id: env.clientId,
-    name: 'Autocares Julia',
-    industry: { EN: 'Transport & Tourism', ES: 'Transporte y Turismo' },
-    logo: '/logos/android-chrome-192x192.png',
-  },
-]
+type ClientRow = Pick<Client, 'id' | 'client_name' | 'logo_path'>
 
 export function ClientPickerPage() {
   const { signOut } = useAuth()
   const navigate = useNavigate()
   const [lang, setLang] = useState<'EN' | 'ES'>('EN')
+
+  useEffect(() => {
+    document.title = 'Clients · Arkflow'
+  }, [])
+
+  const [clients, setClients] = useState<ClientRow[]>([])
+  const [clientsError, setClientsError] = useState<string | null>(null)
 
   // Skill status per client id
   const [skillStatus, setSkillStatus] = useState<Record<number, SkillStatus>>({})
@@ -35,8 +36,52 @@ export function ClientPickerPage() {
     if (!supabase) return
     const sb = supabase
 
+    ;(async () => {
+      // Backwards-compatible fetch: older DBs may not have clients.logo_path yet.
+      const resWithLogo = await sb
+        .from('clients')
+        .select('id,client_name,logo_path')
+        .order('id', { ascending: true })
+
+      if (!resWithLogo.error) {
+        setClientsError(null)
+        setClients((resWithLogo.data ?? []) as ClientRow[])
+        return
+      }
+
+      const msg = resWithLogo.error.message || ''
+      const missingLogoPath =
+        msg.includes('logo_path') && (msg.includes('does not exist') || msg.includes('column') || msg.includes('schema'))
+
+      if (!missingLogoPath) {
+        setClientsError(resWithLogo.error.message)
+        setClients([])
+        return
+      }
+
+      const resNoLogo = await sb
+        .from('clients')
+        .select('id,client_name')
+        .order('id', { ascending: true })
+
+      if (resNoLogo.error) {
+        setClientsError(resNoLogo.error.message)
+        setClients([])
+        return
+      }
+
+      setClientsError(null)
+      setClients(((resNoLogo.data ?? []) as Array<Pick<Client, 'id' | 'client_name'>>).map((c) => ({ ...c, logo_path: null })))
+    })()
+  }, [])
+
+  useEffect(() => {
+    if (!supabase) return
+    const sb = supabase
+    if (clients.length === 0) return
+
     Promise.all(
-      CLIENTS.map(async (c) => {
+      clients.map(async (c) => {
         const { data } = await sb
           .from('automations')
           .select('id, status')
@@ -47,16 +92,55 @@ export function ClientPickerPage() {
         const testing = nonDiscovery.filter((r) => statusLower(r.status ?? '') === 'testing').length
         const offline = nonDiscovery.length - live - testing
 
-        const byId = new Map(rows.map((r) => [r.id, statusLower(r.status ?? '')]))
-        const active = TEAM_MEMBERS.filter((m) => {
-          if (m.automationIds.length === 0) return false
-          const st = m.automationIds.map((aid) => byId.get(aid) ?? '')
-          // Discovery is treated separately on the client dashboard (audit section), not as a worker "active" state.
-          return st.some((s) => s === 'live' || s === 'testing')
-        }).length
-        const inactive = TEAM_MEMBERS.length - active
+        // Workers are derived from real rows: team members assigned to this client.
+        // Their status is based on the status of automations assigned to them (same logic as DashboardPage):
+        // - live if any assigned automation is Live
+        // - testing if any is Testing and none are Live
+        // - offline otherwise
+        const memberIdsRes = await sb
+          .from('team_members_clients')
+          .select('team_member_id')
+          .eq('client_id', c.id)
+        const memberIds = ((memberIdsRes.data ?? []) as Array<{ team_member_id: number }>).map((r) => r.team_member_id)
 
-        return { id: c.id, skill: { live, testing, offline }, workers: { active, inactive } }
+        if (memberIds.length === 0) {
+          return { id: c.id, skill: { live, testing, offline }, workers: { live: 0, testing: 0, offline: 0 } }
+        }
+
+        const [assignRes, autosRes] = await Promise.all([
+          sb
+            .from('team_members_automations')
+            .select('team_member_id,automation_id')
+            .in('team_member_id', memberIds),
+          sb.from('automations').select('id,status').eq('client_id', c.id),
+        ])
+
+        const statusByAutoId = new Map<number, string>()
+        for (const a of (autosRes.data ?? []) as Array<{ id: number; status: string | null }>) {
+          statusByAutoId.set(a.id, statusLower(a.status ?? ''))
+        }
+
+        const autoIdsByMember = new Map<number, number[]>()
+        for (const row of (assignRes.data ?? []) as Array<{ team_member_id: number; automation_id: number }>) {
+          const list = autoIdsByMember.get(row.team_member_id) ?? []
+          list.push(row.automation_id)
+          autoIdsByMember.set(row.team_member_id, list)
+        }
+
+        let wLive = 0
+        let wTesting = 0
+        let wOffline = 0
+        for (const mid of memberIds) {
+          const ids = autoIdsByMember.get(mid) ?? []
+          const st = ids.map((id) => statusByAutoId.get(id) ?? '')
+          const hasLive = st.some((s) => s === 'live')
+          const hasTesting = st.some((s) => s === 'testing')
+          if (hasLive) wLive++
+          else if (hasTesting) wTesting++
+          else wOffline++
+        }
+
+        return { id: c.id, skill: { live, testing, offline }, workers: { live: wLive, testing: wTesting, offline: wOffline } }
       }),
     ).then((results) => {
       const map: Record<number, SkillStatus> = {}
@@ -68,7 +152,7 @@ export function ClientPickerPage() {
       setSkillStatus(map)
       setWorkerStatus(wmap)
     })
-  }, [])
+  }, [clients])
 
   return (
     <div className="page">
@@ -110,20 +194,26 @@ export function ClientPickerPage() {
             {lang === 'EN' ? 'Arkflow Dashboard' : 'Panel Arkflow'}
           </div>
           <h1>{lang === 'EN' ? 'Your clients' : 'Tus clientes'}</h1>
+          {clientsError && (
+            <div style={{ marginTop: 8, color: 'var(--red)' }}>
+              {lang === 'EN' ? 'Failed to load clients:' : 'Error cargando clientes:'} {clientsError}
+            </div>
+          )}
 
           <div className="client-grid">
-            {CLIENTS.map((c) => {
+            {clients.map((c) => {
               const ss = skillStatus[c.id]
               const ws = workerStatus[c.id]
+              const name = c.client_name?.trim() || `Client ${c.id}`
               return (
                 <button
                   key={c.id}
                   className="client-card"
                   onClick={() => navigate(`/client/${c.id}`)}
                 >
-                  <img src={c.logo} alt={c.name} className="client-card-logo" />
-                  <div className="client-card-name">{c.name}</div>
-                  <div className="client-card-industry">{c.industry[lang]}</div>
+                  <img src={clientLogoUrl(c.logo_path)} alt={name} className="client-card-logo" />
+                  <div className="client-card-name">{name}</div>
+                  <div className="client-card-industry">{lang === 'EN' ? 'Client' : 'Cliente'}</div>
 
                   <div className="client-card-divider" />
 
@@ -132,16 +222,22 @@ export function ClientPickerPage() {
                     <div className="client-card-meta-row">
                       <span className="client-card-meta-label">Workers</span>
                       <span className="client-card-meta-pills">
-                        {ws != null && ws.active > 0 && (
+                        {ws != null && ws.live > 0 && (
                           <span className="row-live live">
                             <span className="live-dot live" />
-                            {ws.active} {lang === 'EN' ? 'active' : 'activos'}
+                            {ws.live} {lang === 'EN' ? 'active' : 'activos'}
                           </span>
                         )}
-                        {ws != null && ws.inactive > 0 && (
+                        {ws != null && ws.testing > 0 && (
+                          <span className="row-live testing">
+                            <span className="live-dot testing" />
+                            {ws.testing} {lang === 'EN' ? 'testing' : 'en pruebas'}
+                          </span>
+                        )}
+                        {ws != null && ws.offline > 0 && (
                           <span className="row-live offline">
                             <span className="live-dot offline" />
-                            {ws.inactive} {lang === 'EN' ? 'inactive' : 'inactivos'}
+                            {ws.offline} {lang === 'EN' ? 'inactive' : 'inactivos'}
                           </span>
                         )}
                         {ws == null && <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text4)' }}>–</span>}

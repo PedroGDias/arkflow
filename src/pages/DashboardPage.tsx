@@ -3,9 +3,9 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { env } from '../lib/env'
 import { supabase } from '../lib/supabase'
-import type { Automation, Client, Run } from '../lib/types'
+import type { Automation, Client, Run, TeamMember } from '../lib/types'
+import { clientLogoUrl, uploadClientLogo } from '../lib/clientLogos'
 import { COST_ASSUMPTIONS, fmtTime, rel } from '../lib/roiMath'
-import { TEAM_MEMBERS } from '../lib/team'
 
 type AutoWithRuns = Automation & { runs: Run[] }
 
@@ -195,11 +195,18 @@ export function DashboardPage() {
     const local = loadLocalBrand(cid)
     return local ? { id: cid, primary_brand_color: local } : null
   })
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
+  const [memberAutomationIds, setMemberAutomationIds] = useState<Record<number, number[]>>({})
   const [autos, setAutos] = useState<Automation[]>([])
   const [runs, setRuns] = useState<Run[]>([])
   const [threadTotalsAll, setThreadTotalsAll] = useState<{ total: number | null; completed: number | null }>({ total: null, completed: null })
   const [threadTotalsByAuto, setThreadTotalsByAuto] = useState<Record<number, { total: number; completed: number }> | null>(null)
   const [threadDayCountsByAuto, setThreadDayCountsByAuto] = useState<Record<number, Record<string, number>> | null>(null)
+
+  useEffect(() => {
+    const name = client?.client_name?.trim() ? client.client_name : `Client ${cid}`
+    document.title = `${name} — Automation Overview · Arkflow`
+  }, [client?.client_name, cid])
 
   const coerceFiniteNumber = (v: unknown): number | null => {
     if (typeof v === 'number' && Number.isFinite(v)) return v
@@ -234,8 +241,6 @@ export function DashboardPage() {
   const [openLiveGroupIds, setOpenLiveGroupIds] = useState<Set<string>>(() => new Set())
   // accordion: open per-city rows inside a live group
   const [openCityIds, setOpenCityIds] = useState<Set<number>>(() => new Set())
-  // accordion: open team members (outer level) — Carla open by default
-  const [openTeamIds, setOpenTeamIds] = useState<Set<string>>(() => new Set(['carla']))
   const [howOpen, setHowOpen] = useState(false)
   const [auditOpen, setAuditOpen] = useState(false)
   const [openAuditIds, setOpenAuditIds] = useState<Set<string>>(() => new Set())
@@ -262,7 +267,8 @@ export function DashboardPage() {
         totalSavings: 'Costs Saved',
         totalSavingsHow: '<b>Actual time saved × manual hourly cost</b> (hours saved = runs × min/task ÷ 60). Only live automations with cost fields filled in are counted.',
         totalConversations: 'Customers',
-        totalConversationsHow: 'Unique customer threads handled end-to-end by the automation across all live skills.',
+        totalConversationsHow:
+          'COUNT(DISTINCT runs.customer) across all runs for every automation on this client (live, testing, discovery). NULL and blank customer values are excluded.',
         pctFinished: '% Finished',
         finishedHow: 'Threads with status "completed" divided by total threads.',
         yourTeam: 'Your Team',
@@ -309,7 +315,8 @@ export function DashboardPage() {
         totalSavings: 'Costes ahorrados',
         totalSavingsHow: '<b>Tiempo real ahorrado × coste manual por hora</b> (horas ahorradas = ejecuciones × min/tarea ÷ 60). Solo se cuentan automatizaciones live con los campos de coste completados.',
         totalConversations: 'Clientes',
-        totalConversationsHow: 'Hilos de clientes gestionados de extremo a extremo por la automatización en todas las skills activas.',
+        totalConversationsHow:
+          'COUNT(DISTINCT runs.customer) en todas las ejecuciones de todas las automatizaciones del cliente (live, pruebas, discovery). Se excluyen valores NULL o en blanco en customer.',
         pctFinished: '% finalizadas',
         finishedHow: 'Hilos con estado "completed" dividido por el total de hilos.',
         yourTeam: 'Tu equipo',
@@ -378,10 +385,11 @@ export function DashboardPage() {
   }
 
   function displayAutomationName(a: Automation) {
-    const en = a.automation_name_en ?? a.automation_name ?? ''
-    const local = a.automation_name_local ?? a.automation_name_es ?? a.automation_name ?? ''
-    const chosen = lang === 'ES' ? local : en
-    return chosen || a.automation_name || '—'
+    const en = (a.automation_name_en ?? a.automation_name ?? '').toString()
+    // ES must use automation_name_local when present (fallbacks keep legacy compatibility)
+    const es = (a.automation_name_local ?? a.automation_name_es ?? a.automation_name ?? '').toString()
+    const chosen = lang === 'ES' ? es : en
+    return chosen.trim() || (a.automation_name ?? '').toString().trim() || '—'
   }
 
   function isQuoteAutomation(a: Automation) {
@@ -390,6 +398,16 @@ export function DashboardPage() {
       .map((s) => String(s).toLowerCase())
       .join(' ')
     return candidates.includes('quote') || candidates.includes('presupuesto')
+  }
+
+  function baseNameForGrouping(
+    a: Pick<Automation, 'automation_name' | 'automation_name_en' | 'automation_name_es' | 'automation_name_local'>,
+  ) {
+    // Grouping should match the language shown to the user.
+    return (lang === 'ES'
+      ? (a.automation_name_local ?? a.automation_name_es ?? a.automation_name ?? '')
+      : (a.automation_name_en ?? a.automation_name ?? '')
+    ).toString()
   }
 
   // ── Data loading ─────────────────────────────────────────────────────────
@@ -407,8 +425,8 @@ export function DashboardPage() {
         return
       }
       const sb = supabase
-      const [cRes, aRes, rRes] = await Promise.all([
-        sb.from('clients').select('id,client_name,primary_brand_color,currency').eq('id', cid).maybeSingle(),
+      const [cRes, aRes, rRes, mcRes, maRes, mRes] = await Promise.all([
+        sb.from('clients').select('id,client_name,primary_brand_color,currency,logo_path').eq('id', cid).maybeSingle(),
         sb
           .from('automations')
           .select('*,manual_sample_size,manual_avg_response_time,manual_execution_time_min,manual_hourly_cost,auto_monthly_cost')
@@ -419,6 +437,9 @@ export function DashboardPage() {
           .eq('automations.client_id', cid)
           .order('created_at', { ascending: false })
           .limit(10000),
+        sb.from('team_members_clients').select('team_member_id').eq('client_id', cid),
+        sb.from('team_members_automations').select('team_member_id,automation_id'),
+        sb.from('team_members').select('id,slug,initials,name,role_en,role_es,avatar_bg,avatar_color,sort_order').order('sort_order', { ascending: true }),
       ])
 
       if (aRes.error) throw aRes.error
@@ -454,6 +475,24 @@ export function DashboardPage() {
       // If SELECT failed, we keep whatever is in React state (initialised from localStorage above).
       setAutos((aRes.data ?? []) as Automation[])
       setRuns((rRes.data ?? []) as unknown as Run[])
+
+      // Team members (DB-driven)
+      const memberIds = new Set(((mcRes.data ?? []) as Array<{ team_member_id: number }>).map((r) => r.team_member_id))
+      const allMembers = (mRes.data ?? []) as TeamMember[]
+      const membersForClient = allMembers.filter((m) => memberIds.has(m.id))
+      setTeamMembers(membersForClient)
+
+      // Build member -> automation ids mapping, scoped to automations visible for this client
+      const autoIdsForClient = new Set(((aRes.data ?? []) as Automation[]).map((a) => a.id))
+      const map: Record<number, number[]> = {}
+      for (const row of (maRes.data ?? []) as Array<{ team_member_id: number; automation_id: number }>) {
+        if (!memberIds.has(row.team_member_id)) continue
+        if (!autoIdsForClient.has(row.automation_id)) continue
+        map[row.team_member_id] ??= []
+        map[row.team_member_id].push(row.automation_id)
+      }
+      for (const k of Object.keys(map)) map[Number(k)].sort((x, y) => x - y)
+      setMemberAutomationIds(map)
 
       try {
         const sinceIso = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString()
@@ -553,6 +592,15 @@ export function DashboardPage() {
   const completedThreads = threadTotalsAll.completed
   const finishedPct = totalThreads && totalThreads > 0 && completedThreads != null ? (completedThreads / totalThreads) * 100 : 0
 
+  const uniqueCustomers = useMemo(() => {
+    const s = new Set<string>()
+    for (const r of runs) {
+      const c = typeof r.customer === 'string' ? r.customer.trim() : ''
+      if (c) s.add(c)
+    }
+    return s.size
+  }, [runs])
+
   const kpis = useMemo(() => {
     const avgRespS = totalRuns > 0 ? runs.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalRuns : 0
     const timeSavedMins = Object.values(byAuto).reduce((s, a) => {
@@ -585,8 +633,6 @@ export function DashboardPage() {
     return total
   }, [byAuto])
 
-  // Assign automations to team members; remainder goes to "unassigned"
-  const assignedIds = new Set(TEAM_MEMBERS.flatMap((m) => m.automationIds))
   const discoveryAutos = useMemo(() => {
     const rows = autos.filter((a) => isDiscoveryAutomation(a))
     return rows.sort((a, b) => displayAutomationName(a).localeCompare(displayAutomationName(b), undefined, { sensitivity: 'base' }))
@@ -595,7 +641,7 @@ export function DashboardPage() {
   const auditGroups = useMemo(() => {
     const map = new Map<string, Automation[]>()
     for (const a of discoveryAutos) {
-      const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
+      const base = baseNameForGrouping(a)
       const { task } = splitTaskCity(base)
       const bucket = map.get(task) ?? []
       bucket.push(a)
@@ -610,12 +656,24 @@ export function DashboardPage() {
   }, [discoveryAutos, lang])
 
   const discoveryIds = useMemo(() => new Set(discoveryAutos.map((a) => a.id)), [discoveryAutos])
-  const unassignedAutos = Object.values(byAuto).filter((a) => !assignedIds.has(a.id) && !discoveryIds.has(a.id) && !isDiscoveryAutomation(a))
-  const missingAssignedIds = useMemo(() => {
-    if (loading) return []
-    const present = new Set(autos.map((a) => a.id))
-    return Array.from(assignedIds).filter((id) => !present.has(id)).sort((a, b) => a - b)
-  }, [assignedIds, autos, loading])
+
+  const liveGroups = useMemo(() => {
+    const rows = Object.values(byAuto).filter((a) => !discoveryIds.has(a.id) && !isDiscoveryAutomation(a))
+    const groups = new Map<string, AutoWithRuns[]>()
+    for (const a of rows) {
+      const base = baseNameForGrouping(a)
+      const { task } = splitTaskCity(base)
+      const bucket = groups.get(task) ?? []
+      bucket.push(a)
+      groups.set(task, bucket)
+    }
+    return Array.from(groups.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([task, autos]) => ({
+        task,
+        autos: autos.slice().sort((x, y) => displayAutomationName(x).localeCompare(displayAutomationName(y), undefined, { sensitivity: 'base' })),
+      }))
+  }, [byAuto, discoveryIds, lang])
 
   async function saveAutomationCosts(
     automationId: number,
@@ -1317,7 +1375,7 @@ export function DashboardPage() {
                   totalThreads != null && totalThreads > 0 && completedThreads != null ? (completedThreads / totalThreads) * 100 : null
                 const hangingPct = totalThreads != null && totalThreads > 0 && hangingThreads != null ? (hangingThreads / totalThreads) * 100 : null
 
-                const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
+                const base = baseNameForGrouping(a)
                 const { city } = splitTaskCity(base)
                 const displayCity = city ?? displayAutomationName(a)
 
@@ -1401,7 +1459,7 @@ export function DashboardPage() {
     const allTypeIds = Object.values(byAuto)
       .filter((a) => !isDiscoveryAutomation(a))
       .filter((a) => {
-        const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
+        const base = baseNameForGrouping(a)
         return splitTaskCity(base).task === task
       })
       .map((a) => a.id)
@@ -1593,7 +1651,7 @@ export function DashboardPage() {
           {groupAutos.length > 1 && (
             <div className="city-rows">
               {groupAutos.map((a) => {
-                const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
+                const base = baseNameForGrouping(a)
                 const { city } = splitTaskCity(base)
                 const cityRuns = a.runs.length
                 const cityAvg = cityRuns > 0 ? a.runs.reduce((s, r) => s + (r.response_time ?? 0), 0) / cityRuns : null
@@ -1837,9 +1895,10 @@ export function DashboardPage() {
     )
   }
 
-  // ── Team member header renderer ───────────────────────────────────────────
-  function renderTeamMember(member: (typeof TEAM_MEMBERS)[number]) {
-    const memberAutos = (member.automationIds.map((id) => byAuto[id]).filter(Boolean) as AutoWithRuns[]).filter((a) => !isDiscoveryAutomation(a))
+  // ── Team member renderer (DB-driven) ─────────────────────────────────────
+  function renderTeamMember(member: TeamMember) {
+    const ids = memberAutomationIds[member.id] ?? []
+    const memberAutos = (ids.map((id) => byAuto[id]).filter(Boolean) as AutoWithRuns[]).filter((a) => !isDiscoveryAutomation(a))
     const memberRuns = memberAutos.flatMap((a) => a.runs)
     const totalReplies = memberRuns.length
     const avgRespS = totalReplies > 0 ? memberRuns.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalReplies : 0
@@ -1855,7 +1914,6 @@ export function DashboardPage() {
     })()
     const hasLive = memberAutos.some((a) => (a.status ?? 'Live').toString().toLowerCase() === 'live')
     const hasTesting = memberAutos.some((a) => (a.status ?? '').toString().toLowerCase() === 'testing')
-    const isOpen = openTeamIds.has(member.id)
 
     const statusClass = memberAutos.length === 0 ? 'offline' : hasLive ? 'live' : hasTesting ? 'testing' : 'offline'
     const statusLabel =
@@ -1868,23 +1926,13 @@ export function DashboardPage() {
             : t.inactiveStatus
 
     return (
-      <div key={member.id} className={`team-member ${isOpen ? 'open' : ''}`}>
-        <div
-          className="team-member-header"
-          onClick={() =>
-            setOpenTeamIds((prev) => {
-              const next = new Set(prev)
-              if (next.has(member.id)) next.delete(member.id)
-              else next.add(member.id)
-              return next
-            })
-          }
-        >
+      <div key={member.id} className="team-member open">
+        <div className="team-member-header" style={{ cursor: 'default' }}>
           <div
             className="team-member-avatar"
-            style={{ background: member.avatarBg, color: member.avatarColor }}
+            style={{ background: member.avatar_bg ?? 'var(--brand-bg)', color: member.avatar_color ?? 'var(--brand)' }}
           >
-            {member.initials}
+            {(member.initials ?? '').slice(0, 3)}
           </div>
           <div className="team-member-info">
             <div className="team-member-name">
@@ -1894,7 +1942,7 @@ export function DashboardPage() {
                 {statusLabel}
               </span>
             </div>
-            <div className="team-member-role">{member.role[lang]}</div>
+            <div className="team-member-role">{lang === 'ES' ? member.role_es : member.role_en}</div>
           </div>
 
           <div className="team-stat">
@@ -1938,7 +1986,7 @@ export function DashboardPage() {
                 {(() => {
                   const groups = new Map<string, AutoWithRuns[]>()
                   for (const a of memberAutos) {
-                    const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
+                    const base = baseNameForGrouping(a)
                     const { task } = splitTaskCity(base)
                     const bucket = groups.get(task) ?? []
                     bucket.push(a)
@@ -1965,6 +2013,8 @@ export function DashboardPage() {
   const [brandHexDraft, setBrandHexDraft] = useState(brandHex)
   const [brandPickerOpen, setBrandPickerOpen] = useState(false)
   const brandPickerWrapRef = useRef<HTMLDivElement | null>(null)
+  const [logoUploading, setLogoUploading] = useState(false)
+  const logoFileRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     setBrandHexDraft(brandHex)
@@ -2092,6 +2142,42 @@ export function DashboardPage() {
                         aria-label={lang === 'ES' ? 'HEX de marca' : 'Brand HEX'}
                       />
                     </div>
+
+                    <div className="brand-pop-row">
+                      <label className="brand-pop-lbl">{lang === 'ES' ? 'Logo' : 'Logo'}</label>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <input
+                          ref={logoFileRef}
+                          type="file"
+                          accept="image/*"
+                          style={{ display: 'none' }}
+                          onChange={(e) => {
+                            const f = e.currentTarget.files?.[0] ?? null
+                            e.currentTarget.value = ''
+                            if (!f) return
+                            void (async () => {
+                              try {
+                                setLogoUploading(true)
+                                const newPath = await uploadClientLogo({ clientId: cid, file: f })
+                                setClient((prev) => (prev ? { ...prev, logo_path: newPath } : { id: cid, logo_path: newPath }))
+                              } finally {
+                                setLogoUploading(false)
+                              }
+                            })()
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="hdr-ctl hdr-btn"
+                          disabled={logoUploading}
+                          onClick={() => logoFileRef.current?.click()}
+                        >
+                          {logoUploading
+                            ? (lang === 'ES' ? 'Subiendo…' : 'Uploading…')
+                            : (lang === 'ES' ? 'Subir logo' : 'Upload logo')}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -2128,8 +2214,12 @@ export function DashboardPage() {
           </button>
           <div className="topbar-label">{t.clientDashboard}</div>
           <h1>
-            <img src="/logos/android-chrome-192x192.png" alt="Autocares Julia" className="client-logo" />
-            Autocares Julia
+            <img
+              src={clientLogoUrl(client?.logo_path)}
+              alt={client?.client_name?.trim() ? client.client_name : 'Client'}
+              className="client-logo"
+            />
+            {client?.client_name?.trim() ? client.client_name : `Client ${cid}`}
           </h1>
 
           {activeTab === 'opportunities' && (
@@ -2139,7 +2229,7 @@ export function DashboardPage() {
                 const nTasks = auditGroups.length
                 const uniqueCities = new Set(
                   auditGroups.flatMap((g) =>
-                    g.rows.map((a) => splitTaskCity((a.automation_name_en ?? a.automation_name ?? '').toString()).city).filter(Boolean)
+                    g.rows.map((a) => splitTaskCity(baseNameForGrouping(a)).city).filter(Boolean)
                   )
                 )
                 const nLocs = uniqueCities.size || auditGroups.reduce((s, g) => s + g.rows.length, 0)
@@ -2172,7 +2262,7 @@ export function DashboardPage() {
             </div>
             <div className="kpi highlight">
               <div className="kpi-val" id="kTotalConvos">
-                {totalThreads != null ? totalThreads : '-'}
+                {uniqueCustomers > 0 ? uniqueCustomers : '-'}
               </div>
               <div className="kpi-lbl">{t.totalConversations}</div>
             </div>
@@ -2260,52 +2350,29 @@ export function DashboardPage() {
             </div>
           ) : (
             <div className="team-list">
-              {!loading && missingAssignedIds.length > 0 && (
-                <div className="error-msg" style={{ background: 'var(--red-bg)', color: 'var(--red)' }}>
-                  Missing automations in DB for this client: {missingAssignedIds.join(', ')}. Check you're pointing at the expected Supabase project and RLS allows selecting `automations`.
-                </div>
-              )}
-
               <div className="section-head">
                 <div className="section-label">{t.yourTeam}</div>
                 <div className="section-count">
-                  {TEAM_MEMBERS.length} {t.members}
+                  {teamMembers.length} {t.members}
                 </div>
               </div>
 
-              {TEAM_MEMBERS.map((member) => renderTeamMember(member))}
-
-              {/* Unassigned automations catch-all */}
-              {!loading && unassignedAutos.length > 0 && (
-                <div className="team-member open">
-                  <div className="team-member-header" style={{ cursor: 'default' }}>
-                    <div className="team-member-avatar" style={{ background: 'var(--card)', color: 'var(--text3)' }}>-</div>
-                    <div className="team-member-info">
-                      <div className="team-member-name" style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--text3)' }}>
-                        {lang === 'EN' ? 'Unassigned' : 'Sin asignar'}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="team-member-body">
-                    <div className="team-member-skills">
-                      <div className="auto-list">
-                        {(() => {
-                          const groups = new Map<string, AutoWithRuns[]>()
-                          for (const a of unassignedAutos) {
-                            const base = (a.automation_name_en ?? a.automation_name ?? '').toString()
-                            const { task } = splitTaskCity(base)
-                            const bucket = groups.get(task) ?? []
-                            bucket.push(a)
-                            groups.set(task, bucket)
-                          }
-                          return Array.from(groups.entries())
-                            .sort(([a], [b]) => a.localeCompare(b))
-                            .map(([task, rows]) => renderLiveGroupRow(`unassigned:${task}`, task, rows))
-                        })()}
-                      </div>
-                    </div>
-                  </div>
+              {loading ? (
+                <div className="skills-empty">
+                  <div className="spinner" style={{ margin: '0 auto 8px' }}></div>
                 </div>
+              ) : teamMembers.length === 0 ? (
+                <div className="tab-empty-state">
+                  <div className="tab-empty-icon">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                  </div>
+                  <div className="tab-empty-title">{lang === 'EN' ? 'No team members assigned' : 'Sin miembros asignados'}</div>
+                  <div className="tab-empty-desc">{lang === 'EN' ? 'Assign team members to this client to see the team view.' : 'Asigna miembros a este cliente para ver el equipo.'}</div>
+                </div>
+              ) : (
+                teamMembers.map((m) => renderTeamMember(m))
               )}
             </div>
           )}

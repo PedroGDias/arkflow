@@ -21,6 +21,7 @@ export type Run = {
   created_at: string
   status: string | null
   response_time: number | null
+  customer?: string | null
 }
 
 export type Client = {
@@ -28,5 +29,18 @@ export type Client = {
   client_name?: string | null
   primary_brand_color?: string | null
   currency?: string | null
+  logo_path?: string | null
+}
+
+export type TeamMember = {
+  id: number
+  slug: string
+  initials: string
+  name: string
+  role_en: string
+  role_es: string
+  avatar_bg?: string | null
+  avatar_color?: string | null
+  sort_order?: number | null
 }
 
