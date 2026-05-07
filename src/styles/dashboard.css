@@ -728,6 +728,14 @@ body {
 .team-member.audit-member > .team-member-header .team-stat .ts-val { color: var(--white); }
 .team-member.audit-member > .team-member-header .team-stat small { color: rgba(255,255,255,0.55); }
 .team-member.audit-member > .team-member-header .chevron { color: rgba(255,255,255,0.55); }
+.team-member-header .chevron {
+  width: 24px;
+  height: 24px;
+  color: var(--text4);
+  transition: transform .2s;
+  flex-shrink: 0;
+}
+.team-member.open .team-member-header .chevron { transform: rotate(180deg); }
 
 /* Tighten the audit table (more columns, less horizontal space). */
 .auto-summary.audit-summary {

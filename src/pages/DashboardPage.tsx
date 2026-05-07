@@ -283,6 +283,8 @@ export function DashboardPage() {
   const [openIds, setOpenIds] = useState<Set<number>>(() => new Set())
   // accordion: open live automation groups (task-level, inside a team member)
   const [openLiveGroupIds, setOpenLiveGroupIds] = useState<Set<string>>(() => new Set())
+  // accordion: open team members (worker level)
+  const [openTeamIds, setOpenTeamIds] = useState<Set<number>>(() => new Set())
   // accordion: open per-city rows inside a live group
   const [openCityIds, setOpenCityIds] = useState<Set<number>>(() => new Set())
   const [howOpen, setHowOpen] = useState(false)
@@ -296,6 +298,26 @@ export function DashboardPage() {
   const rowEls = useRef(new Map<number, HTMLDivElement>())
   const prevOpenIds = useRef<Set<number>>(new Set())
   const seededBrandOnce = useRef(false)
+  const openTeamListKeyRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const key = [...teamMembers.map((m) => m.id)].sort((a, b) => a - b).join('\0')
+    const idSet = new Set(teamMembers.map((m) => m.id))
+    if (openTeamListKeyRef.current !== key) {
+      openTeamListKeyRef.current = key
+      setOpenTeamIds(new Set(idSet))
+      return
+    }
+    setOpenTeamIds((prev) => {
+      let changed = false
+      const next = new Set<number>()
+      for (const id of prev) {
+        if (idSet.has(id)) next.add(id)
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [teamMembers])
 
   // ── i18n ────────────────────────────────────────────────────────────────
   const t = useMemo(() => {
@@ -1953,9 +1975,21 @@ export function DashboardPage() {
             ? t.testingStatus
             : t.inactiveStatus
 
+    const teamOpen = openTeamIds.has(member.id)
+
     return (
-      <div key={member.id} className="team-member open">
-        <div className="team-member-header" style={{ cursor: 'default' }}>
+      <div key={member.id} className={`team-member ${teamOpen ? 'open' : ''}`}>
+        <div
+          className="team-member-header"
+          onClick={() =>
+            setOpenTeamIds((prev) => {
+              const next = new Set(prev)
+              if (next.has(member.id)) next.delete(member.id)
+              else next.add(member.id)
+              return next
+            })
+          }
+        >
           <div
             className="team-member-avatar"
             style={{ background: member.avatar_bg ?? 'var(--brand-bg)', color: member.avatar_color ?? 'var(--brand)' }}
