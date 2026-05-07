@@ -12,6 +12,8 @@
   /* Client brand color (overridden per-client via inline CSS vars). */
   --brand: #1a7a3a;
   --brand-bg: #e4f2e8;
+  /* Mini chart / hour bars — inline --chart-bar on dashboard pins exact client hex */
+  --chart-bar: var(--brand);
   /* Backwards-compat: existing UI uses --green for primary accents. */
   --green: var(--brand);
   --green-bg: var(--brand-bg);
@@ -21,6 +23,11 @@
   --blue-bg: #e8eef8;
   --red: #b33a2a;
   --red-bg: #f5e6e3;
+  /* Status pills (active / testing / inactive) — not tied to client --brand */
+  --badge-active-fg: #157a3c;
+  --badge-active-bg: #e5f0e9;
+  --badge-inactive-fg: #6f6e6a;
+  --badge-inactive-bg: #ebe9e3;
   --radius: 8px;
   --serif: 'DM Serif Display', Georgia, serif;
   --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -221,11 +228,11 @@ body {
 .live-badge {
   display: flex; align-items: center; gap: 6px;
   font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--green); background: var(--green-bg);
+  color: var(--badge-active-fg); background: var(--badge-active-bg);
   padding: 5px 12px; border-radius: 20px;
 }
 .live-dot {
-  width: 7px; height: 7px; background: var(--green);
+  width: 7px; height: 7px;
   border-radius: 50%; animation: pulse 2s ease-in-out infinite;
 }
 @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.3;transform:scale(.7)} }
@@ -322,9 +329,14 @@ body {
 .row-live {
   display: inline-flex; align-items: center; gap: 5px;
   font-family: var(--mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--green); background: var(--green-bg);
+  letter-spacing: 0.06em;
   padding: 2px 8px; border-radius: 14px; font-weight: 400; flex-shrink: 0;
 }
+.row-live.live {
+  color: var(--badge-active-fg);
+  background: var(--badge-active-bg);
+}
+.row-live.live .live-dot { background: var(--badge-active-fg); }
 .row-live.testing { color: var(--yellow); background: var(--yellow-bg); }
 .row-live.testing .live-dot { background: var(--yellow); }
 .row-live.discovery { color: var(--blue); background: var(--blue-bg); }
@@ -455,9 +467,11 @@ body {
   background: color-mix(in oklab, var(--brand) 6%, var(--white));
   border-color: color-mix(in oklab, var(--brand) 20%, var(--border));
 }
+/* Uses --brand-bg from the page (same semi-transparent brand as KPI accents), not plain gray. */
 .detail-strip.inputs-card .strip-head {
-  background: color-mix(in oklab, var(--brand) 10%, var(--bg));
-  color: color-mix(in oklab, var(--text3) 60%, var(--brand));
+  background: var(--brand-bg);
+  color: var(--text2);
+  border-bottom: 1px solid color-mix(in oklab, var(--brand) 24%, var(--border));
 }
 .strip-head-btn {
   width: 100%;
@@ -468,6 +482,8 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  -webkit-appearance: none;
+  appearance: none;
 }
 .strip-head-btn:hover { filter: brightness(0.98); }
 .strip-head-btn .inputs-chevron .chevron {
@@ -514,7 +530,18 @@ body {
   align-items: flex-end;
   justify-content: center;
 }
-.mini-bar { position: relative; overflow: visible; width: 100%; max-width: 36px; background: var(--brand); border-radius: 3px 3px 0 0; min-height: 0; transition: height .5s ease; }
+.mini-bar {
+  position: relative;
+  overflow: visible;
+  width: 100%;
+  max-width: 36px;
+  /* Fallback when inline backgroundColor is unavailable */
+  background: var(--chart-bar, var(--brand));
+  border-radius: 3px 3px 0 0;
+  min-height: 0;
+  transition: height .5s ease;
+  forced-color-adjust: none;
+}
 .mini-bar:hover { opacity: .6; }
 .mini-bar.zero { background: transparent; }
 /* Value floats directly above the bar top */
@@ -532,7 +559,16 @@ body {
   align-items: flex-end;
   justify-content: center;
 }
-.hour-bar { position: relative; overflow: visible; width: 100%; background: var(--brand); border-radius: 2px 2px 0 0; min-height: 0; transition: height .4s ease; }
+.hour-bar {
+  position: relative;
+  overflow: visible;
+  width: 100%;
+  background: var(--chart-bar, var(--brand));
+  border-radius: 2px 2px 0 0;
+  min-height: 0;
+  transition: height .4s ease;
+  forced-color-adjust: none;
+}
 .hour-bar.zero { background: transparent; }
 .hour-bar:hover { opacity: .6; }
 /* Value floats directly above the hour bar top */
@@ -623,8 +659,8 @@ body {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--green);
-  background: var(--green-bg);
+  color: var(--badge-active-fg);
+  background: var(--badge-active-bg);
   padding: 3px 10px;
   border-radius: 14px;
   align-self: flex-start;
@@ -1071,8 +1107,8 @@ body {
 .team-member .auto-row { scroll-margin-top: 130px; }
 
 /* row-live offline variant */
-.row-live.offline { color: var(--text3); background: var(--card); }
-.row-live.offline .live-dot { background: var(--text3); animation: none; }
+.row-live.offline { color: var(--badge-inactive-fg); background: var(--badge-inactive-bg); }
+.row-live.offline .live-dot { background: var(--badge-inactive-fg); animation: none; }
 
 /* back link */
 /* ── Opportunities intro blurb ── */

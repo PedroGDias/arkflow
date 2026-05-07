@@ -1,13 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { env } from '../lib/env'
 import { supabase } from '../lib/supabase'
-import type { Automation, Client, Run, TeamMember } from '../lib/types'
+import type { Automation, AutomationSummary, Client, ClientKpis, Run, TeamMember } from '../lib/types'
 import { clientLogoUrl, uploadClientLogo } from '../lib/clientLogos'
 import { COST_ASSUMPTIONS, fmtTime, rel } from '../lib/roiMath'
 
-type AutoWithRuns = Automation & { runs: Run[] }
+type AutoWithSummary = Automation & { summary: AutomationSummary | null }
+
+/** Inline fill so chart bars always match client brand (avoids UA / variable quirks). */
+function chartBarFillStyle(heightPct: number, isZero: boolean, brandHex: string): CSSProperties {
+  return {
+    height: `${heightPct}%`,
+    backgroundColor: isZero ? 'transparent' : brandHex,
+  }
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function chevronSvg() {
@@ -35,6 +44,40 @@ function fmtDurationS(seconds: number) {
   }
   if (seconds < 60) return `${Math.round(seconds)}s`
   return fmtTime(seconds / 60)
+}
+
+/** Fixed-width HH:MM:SS for durations stored as seconds (e.g. opportunities / audit). */
+function fmtSecondsHMS(sec: number) {
+  if (!Number.isFinite(sec) || sec < 0) return ''
+  const s = Math.floor(sec)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const r = s % 60
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(h)}:${pad(m)}:${pad(r)}`
+}
+
+/** Accepts plain seconds or HH:MM:SS / MM:SS; returns integer seconds for DB. */
+function parseSecondsHMSOrRaw(s: string): number | null {
+  const t = s.trim()
+  if (!t) return null
+  if (/^\d+$/.test(t)) {
+    const n = Number(t)
+    return Number.isFinite(n) ? Math.round(n) : null
+  }
+  const parts = t.split(':').map((p) => p.trim())
+  if (parts.length === 3) {
+    const h = Number(parts[0])
+    const m = Number(parts[1])
+    const sec = Number(parts[2])
+    if ([h, m, sec].every((x) => Number.isFinite(x)) && m < 60 && sec < 60) return Math.round(h * 3600 + m * 60 + sec)
+  }
+  if (parts.length === 2) {
+    const m = Number(parts[0])
+    const sec = Number(parts[1])
+    if ([m, sec].every((x) => Number.isFinite(x)) && sec < 60) return Math.round(m * 60 + sec)
+  }
+  return null
 }
 
 function statusLower(a: Pick<Automation, 'status'>) {
@@ -198,7 +241,8 @@ export function DashboardPage() {
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [memberAutomationIds, setMemberAutomationIds] = useState<Record<number, number[]>>({})
   const [autos, setAutos] = useState<Automation[]>([])
-  const [runs, setRuns] = useState<Run[]>([])
+  const [clientKpis, setClientKpis] = useState<ClientKpis | null>(null)
+  const [autoSummaries, setAutoSummaries] = useState<Record<number, AutomationSummary>>({})
   const [threadTotalsAll, setThreadTotalsAll] = useState<{ total: number | null; completed: number | null }>({ total: null, completed: null })
   const [threadTotalsByAuto, setThreadTotalsByAuto] = useState<Record<number, { total: number; completed: number }> | null>(null)
   const [threadDayCountsByAuto, setThreadDayCountsByAuto] = useState<Record<number, Record<string, number>> | null>(null)
@@ -296,6 +340,7 @@ export function DashboardPage() {
         saved: 'Time Saved',
         perf: 'Perf',
         lastMsg: 'Last Reply',
+        deployment: 'Deployed',
         justNow: 'just now',
         quoteRequest: 'Quote Request',
         completed: 'Completed',
@@ -344,6 +389,7 @@ export function DashboardPage() {
         saved: 'Tiempo ahorrado',
         perf: 'Rend.',
         lastMsg: 'Última respuesta',
+        deployment: 'Desplegado',
         justNow: 'ahora mismo',
         quoteRequest: 'Solicitud de Presupuesto',
         completed: 'Completadas',
@@ -384,6 +430,32 @@ export function DashboardPage() {
     return `hace ${Math.round(s / 86400)}d`
   }
 
+  function earliestCreatedAtIso(rows: Automation[]) {
+    let bestIso: string | null = null
+    let bestT = Infinity
+    for (const r of rows) {
+      const iso = r.created_at
+      if (iso == null || String(iso).trim() === '') continue
+      const t = new Date(iso).getTime()
+      if (Number.isNaN(t)) continue
+      if (t < bestT) {
+        bestT = t
+        bestIso = iso
+      }
+    }
+    return bestIso
+  }
+
+  function formatDeployedAt(iso: string | null | undefined) {
+    if (iso == null || String(iso).trim() === '') return '-'
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return '-'
+    const dd = String(d.getDate()).padStart(2, '0')
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const yyyy = String(d.getFullYear())
+    return `${dd}-${mm}-${yyyy}`
+  }
+
   function displayAutomationName(a: Automation) {
     const en = (a.automation_name_en ?? a.automation_name ?? '').toString()
     // ES must use automation_name_local when present (fallbacks keep legacy compatibility)
@@ -417,7 +489,8 @@ export function DashboardPage() {
       if (!supabase) {
         setClient(null)
         setAutos([])
-        setRuns([])
+        setClientKpis(null)
+        setAutoSummaries({})
         setThreadTotalsAll({ total: null, completed: null })
         setThreadTotalsByAuto(null)
         setThreadDayCountsByAuto(null)
@@ -425,25 +498,22 @@ export function DashboardPage() {
         return
       }
       const sb = supabase
-      const [cRes, aRes, rRes, mcRes, maRes, mRes] = await Promise.all([
+      const [cRes, aRes, kpisRes, summariesRes, mcRes, maRes, mRes] = await Promise.all([
         sb.from('clients').select('id,client_name,primary_brand_color,currency,logo_path').eq('id', cid).maybeSingle(),
         sb
           .from('automations')
           .select('*,manual_sample_size,manual_avg_response_time,manual_execution_time_min,manual_hourly_cost,auto_monthly_cost')
           .eq('client_id', cid),
-        sb
-          .from('runs')
-          .select('*,automations!inner(client_id)')
-          .eq('automations.client_id', cid)
-          .order('created_at', { ascending: false })
-          .limit(10000),
+        sb.rpc('get_client_kpis', { p_client_id: cid }),
+        sb.rpc('get_automation_summaries', { p_client_id: cid }),
         sb.from('team_members_clients').select('team_member_id').eq('client_id', cid),
         sb.from('team_members_automations').select('team_member_id,automation_id'),
         sb.from('team_members').select('id,slug,initials,name,role_en,role_es,avatar_bg,avatar_color,sort_order').order('sort_order', { ascending: true }),
       ])
 
       if (aRes.error) throw aRes.error
-      if (rRes.error) throw rRes.error
+      if (kpisRes.error) throw kpisRes.error
+      if (summariesRes.error) throw summariesRes.error
 
       // Brand color: DB is the source of truth when readable; localStorage is the fallback.
       if (!cRes.error) {
@@ -474,7 +544,12 @@ export function DashboardPage() {
 
       // If SELECT failed, we keep whatever is in React state (initialised from localStorage above).
       setAutos((aRes.data ?? []) as Automation[])
-      setRuns((rRes.data ?? []) as unknown as Run[])
+      setClientKpis((kpisRes.data as ClientKpis[] | null)?.[0] ?? null)
+      const summaryMap: Record<number, AutomationSummary> = {}
+      for (const s of (summariesRes.data as AutomationSummary[] | null) ?? []) {
+        summaryMap[s.automation_id] = s
+      }
+      setAutoSummaries(summaryMap)
 
       // Team members (DB-driven)
       const memberIds = new Set(((mcRes.data ?? []) as Array<{ team_member_id: number }>).map((r) => r.team_member_id))
@@ -577,61 +652,28 @@ export function DashboardPage() {
   }, [openIds])
 
   // ── Derived data ─────────────────────────────────────────────────────────
-  const byAuto: Record<number, AutoWithRuns> = useMemo(() => {
-    const m: Record<number, AutoWithRuns> = {}
-    for (const a of autos) m[a.id] = { ...(a as Automation), runs: [] }
-    for (const r of runs) {
-      const bucket = m[r.automation_id]
-      if (bucket) bucket.runs.push(r)
-    }
+  const byAuto: Record<number, AutoWithSummary> = useMemo(() => {
+    const m: Record<number, AutoWithSummary> = {}
+    for (const a of autos) m[a.id] = { ...(a as Automation), summary: autoSummaries[a.id] ?? null }
     return m
-  }, [autos, runs])
+  }, [autos, autoSummaries])
 
-  const totalRuns = runs.length
   const totalThreads = threadTotalsAll.total
   const completedThreads = threadTotalsAll.completed
   const finishedPct = totalThreads && totalThreads > 0 && completedThreads != null ? (completedThreads / totalThreads) * 100 : 0
 
-  const uniqueCustomers = useMemo(() => {
-    const s = new Set<string>()
-    for (const r of runs) {
-      const c = typeof r.customer === 'string' ? r.customer.trim() : ''
-      if (c) s.add(c)
-    }
-    return s.size
-  }, [runs])
-
   const kpis = useMemo(() => {
-    const avgRespS = totalRuns > 0 ? runs.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalRuns : 0
-    const timeSavedMins = Object.values(byAuto).reduce((s, a) => {
-      const mins = coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN
-      return s + a.runs.length * mins
-    }, 0)
+    const avgRespS = clientKpis?.avg_response_s ?? 0
+    const timeSavedMins = clientKpis?.time_saved_mins ?? 0
     const speedPct = avgRespS > 0 ? ((COST_ASSUMPTIONS.MANUAL_RESPONSE_S - avgRespS) / COST_ASSUMPTIONS.MANUAL_RESPONSE_S) * 100 : 0
     return { avgRespS, timeSavedMins, speedPct }
-  }, [runs, totalRuns, byAuto])
+  }, [clientKpis])
 
-  // Total estimated savings for a single live automation based on actual run history:
-  //   timeSaved × manual_hourly_cost
-  // (timeSaved in hours = runs × manual_execution_time_min ÷ 60)
-  const autoTotalSavings = (a: AutoWithRuns): number | null => {
-    const mins = coerceFiniteNumber(a.manual_execution_time_min)
-    const hourly = coerceFiniteNumber(a.manual_hourly_cost)
-    if (mins == null || hourly == null) return null
-    const manualCostPerRun = (hourly * mins) / 60
-    return a.runs.length * manualCostPerRun
-  }
+  // Per-automation actual savings from backend summary (null when cost fields not configured)
+  const autoTotalSavings = (a: AutoWithSummary): number | null => a.summary?.total_savings_eur ?? null
 
-  // Client-level: sum total savings across all live (non-discovery) automations
-  const clientTotalSavings = useMemo(() => {
-    const liveAutos = Object.values(byAuto).filter((a) => !isDiscoveryAutomation(a))
-    let total: number | null = null
-    for (const a of liveAutos) {
-      const s = autoTotalSavings(a)
-      if (s != null) total = (total ?? 0) + s
-    }
-    return total
-  }, [byAuto])
+  // Client-level costs saved comes directly from the KPI RPC
+  const clientTotalSavings = clientKpis?.costs_saved_eur ?? null
 
   const discoveryAutos = useMemo(() => {
     const rows = autos.filter((a) => isDiscoveryAutomation(a))
@@ -659,7 +701,7 @@ export function DashboardPage() {
 
   const liveGroups = useMemo(() => {
     const rows = Object.values(byAuto).filter((a) => !discoveryIds.has(a.id) && !isDiscoveryAutomation(a))
-    const groups = new Map<string, AutoWithRuns[]>()
+    const groups = new Map<string, AutoWithSummary[]>()
     for (const a of rows) {
       const base = baseNameForGrouping(a)
       const { task } = splitTaskCity(base)
@@ -844,10 +886,11 @@ export function DashboardPage() {
   }
 
   // ── Skill row renderer ────────────────────────────────────────────────────
-  function renderSkillRow(a: AutoWithRuns) {
-    const r = a.runs
-    const avgT = r.length > 0 ? (r.reduce((s, x) => s + (x.response_time ?? 0), 0) / r.length).toFixed(0) : '-'
-    const last = r.length > 0 ? relLang(r[0].created_at) : '-'
+  function renderSkillRow(a: AutoWithSummary) {
+    const sm = a.summary
+    const runCount = sm?.run_count ?? 0
+    const avgT = sm && sm.avg_response_s > 0 ? sm.avg_response_s.toFixed(0) : '-'
+    const last = sm?.last_run_at ? relLang(sm.last_run_at) : '-'
     const showThreadStats = isQuoteAutomation(a)
     const statusRaw = (a.status ?? 'Live').toString()
     const statusLower = statusRaw.toLowerCase()
@@ -863,60 +906,34 @@ export function DashboardPage() {
         ? (completedThreadsAuto / totalThreadsAuto) * 100
         : 0
 
-    const avgRespA = r.length > 0 ? r.reduce((s, x) => s + (x.response_time ?? 0), 0) / r.length : 0
+    const avgRespA = sm?.avg_response_s ?? 0
     const perfPct = avgRespA > 0 ? ((COST_ASSUMPTIONS.MANUAL_RESPONSE_S - avgRespA) / COST_ASSUMPTIONS.MANUAL_RESPONSE_S) * 100 : 0
 
-    const hourCounts = new Array(24).fill(0)
-    for (const x of r) hourCounts[new Date(x.created_at).getHours()]++
-    const hourTotal = r.length || 1
-    const maxH = Math.max(...hourCounts, 1)
+    // hourly distribution — dense 24-element arrays from backend
+    const hourCounts = sm?.hourly_dist.map((h) => h.c) ?? new Array(24).fill(0)
+    const hourAvgs   = sm?.hourly_dist.map((h) => h.s) ?? new Array(24).fill(0)
+    const hourTotal  = runCount || 1
+    const maxH       = Math.max(...hourCounts, 1)
+    const maxHourAvg = Math.max(...hourAvgs, 1)
 
-    const wdCounts = new Array(7).fill(0)
-    for (const x of r) wdCounts[new Date(x.created_at).getDay()]++
-    const wdOrder = [1, 2, 3, 4, 5, 6, 0]
+    // weekday distribution — dense 7-element array from backend (0=Sun)
+    const wdCounts = sm?.weekday_dist ?? new Array(7).fill(0)
+    const wdOrder  = [1, 2, 3, 4, 5, 6, 0]
     const wdLabels = lang === 'ES' ? ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'] : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-    const maxWd = Math.max(...wdOrder.map((d) => wdCounts[d]), 1)
+    const maxWd    = Math.max(...wdOrder.map((d) => wdCounts[d] ?? 0), 1)
 
-    const days: Record<string, { total: number; timeSum: number }> = {}
-    for (const x of r) {
-      const d = new Date(x.created_at)
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-      days[key] ??= { total: 0, timeSum: 0 }
-      days[key].total++
-      days[key].timeSum += x.response_time ?? 0
-    }
-
-    const avgRespSByDayL10D = last10DayKeys.map((k) => {
-      const dd = days[k]
-      if (!dd || dd.total === 0) return 0
-      return dd.timeSum / dd.total
-    })
-    const maxDayAvgL10D = Math.max(...avgRespSByDayL10D, 1)
-
-    const repliesByDayL10D = (() => {
-      const m: Record<string, number> = {}
-      for (const x of r) {
-        const d = new Date(x.created_at)
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-        m[key] = (m[key] ?? 0) + 1
-      }
-      return last10DayKeys.map((k) => m[k] ?? 0)
-    })()
-    const minsPerRun = coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN
-    const savedMinsByDayL10D = repliesByDayL10D.map((cnt) => cnt * minsPerRun)
+    // daily L10D — 10-element array from backend (index 0 = 9 days ago, index 9 = today)
+    const emptyDay = { day: '', run_count: 0, avg_resp_s: 0, saved_mins: 0 }
+    const daily           = sm?.daily_l10d ?? last10DayKeys.map(() => emptyDay)
+    const repliesByDayL10D   = daily.map((d) => d.run_count)
+    const avgRespSByDayL10D  = daily.map((d) => d.avg_resp_s)
+    const savedMinsByDayL10D = daily.map((d) => d.saved_mins)
     const customersByDayL10D = last10DayKeys.map((k) => (threadDayCountsByAuto?.[a.id]?.[k] ?? 0))
-    const maxRepliesL10D = Math.max(...repliesByDayL10D, 1)
+
+    const maxRepliesL10D   = Math.max(...repliesByDayL10D, 1)
+    const maxDayAvgL10D    = Math.max(...avgRespSByDayL10D, 1)
     const maxSavedMinsL10D = Math.max(...savedMinsByDayL10D, 1)
     const maxCustomersL10D = Math.max(...customersByDayL10D, 1)
-
-    const hourResp = new Array(24).fill(0).map(() => ({ count: 0, timeSum: 0 }))
-    for (const x of r) {
-      const h = new Date(x.created_at).getHours()
-      hourResp[h].count++
-      hourResp[h].timeSum += x.response_time ?? 0
-    }
-    const hourAvgs = hourResp.map((v) => (v.count > 0 ? v.timeSum / v.count : 0))
-    const maxHourAvg = Math.max(...hourAvgs, 1)
 
     const isOpen = openIds.has(a.id)
     const manualSample = coerceFiniteNumber(a.manual_sample_size)
@@ -952,8 +969,12 @@ export function DashboardPage() {
             </span>
           </div>
           <div className="auto-stat">
+            <small>{t.deployment}</small>
+            <span className="val">{formatDeployedAt(a.created_at)}</span>
+          </div>
+          <div className="auto-stat">
             <small>{t.msgs}</small>
-            <span className="val">{r.length}</span>
+            <span className="val">{runCount}</span>
           </div>
           {showThreadStats ? (
             <div className="auto-stat">
@@ -973,7 +994,7 @@ export function DashboardPage() {
           </div>
           <div className="auto-stat good">
             <small>{t.saved}</small>
-            <span className="val">{fmtTime(r.length * (coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN))}</span>
+            <span className="val">{fmtTime(runCount * (coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN))}</span>
           </div>
           <div className="auto-stat good">
             <small>
@@ -1001,7 +1022,7 @@ export function DashboardPage() {
                     return (
                       <div className="mini-bar-g" key={last10DayKeys[i]}>
                         <div className="mini-bar-track">
-                          <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                          <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={chartBarFillStyle(pct, cnt === 0, brandHex)}>
                             <div className="mini-bar-v">{cnt > 0 ? `${cnt}` : ''}</div>
                           </div>
                         </div>
@@ -1019,7 +1040,7 @@ export function DashboardPage() {
                     return (
                       <div className="mini-bar-g" key={last10DayKeys[i]}>
                         <div className="mini-bar-track">
-                          <div className={`mini-bar ${!showThreadStats || cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                          <div className={`mini-bar ${!showThreadStats || cnt === 0 ? 'zero' : ''}`} style={chartBarFillStyle(pct, !showThreadStats || cnt === 0, brandHex)}>
                             <div className="mini-bar-v">{showThreadStats && cnt > 0 ? `${cnt}` : ''}</div>
                           </div>
                         </div>
@@ -1038,7 +1059,7 @@ export function DashboardPage() {
                     return (
                       <div className="hour-bar-g" key={h}>
                         <div className="hour-bar-track">
-                          <div className={`hour-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                          <div className={`hour-bar ${cnt === 0 ? 'zero' : ''}`} style={chartBarFillStyle(pct, cnt === 0, brandHex)}>
                             <div className="hour-bar-v">{cnt > 0 ? `${dispPct}%` : ''}</div>
                           </div>
                         </div>
@@ -1058,7 +1079,7 @@ export function DashboardPage() {
                     return (
                       <div className="mini-bar-g" key={di}>
                         <div className="mini-bar-track">
-                          <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                          <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={chartBarFillStyle(pct, cnt === 0, brandHex)}>
                             <div className="mini-bar-v">{cnt > 0 ? `${dispPct}%` : ''}</div>
                           </div>
                         </div>
@@ -1083,7 +1104,7 @@ export function DashboardPage() {
                     return (
                       <div className="mini-bar-g" key={last10DayKeys[i]}>
                         <div className="mini-bar-track">
-                          <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                          <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={chartBarFillStyle(pct, avg === 0, brandHex)}>
                             <div className="mini-bar-v">{avg > 0 ? `${avg.toFixed(0)}s` : ''}</div>
                           </div>
                         </div>
@@ -1101,7 +1122,7 @@ export function DashboardPage() {
                     return (
                       <div className="mini-bar-g" key={last10DayKeys[i]}>
                         <div className="mini-bar-track">
-                          <div className={`mini-bar ${mins === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                          <div className={`mini-bar ${mins === 0 ? 'zero' : ''}`} style={chartBarFillStyle(pct, mins === 0, brandHex)}>
                             <div className="mini-bar-v">{mins > 0 ? fmtTime(mins) : ''}</div>
                           </div>
                         </div>
@@ -1119,7 +1140,7 @@ export function DashboardPage() {
                     return (
                       <div className="mini-bar-g" key={h}>
                         <div className="mini-bar-track">
-                          <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                          <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={chartBarFillStyle(pct, avg === 0, brandHex)}>
                             <div className="mini-bar-v">{avg > 0 ? `${avg.toFixed(0)}s` : ''}</div>
                           </div>
                         </div>
@@ -1229,21 +1250,26 @@ export function DashboardPage() {
                   </span>
                 </div>
                 <div className="auto-stat audit-stat hl">
-                  <small>{lang === 'ES' ? 'Resp. media (s)' : 'Avg resp (s)'}</small>
+                  <small>{lang === 'ES' ? 'Resp. media' : 'Avg resp'}</small>
                   <span className="val">
                     <input
                       className="audit-input"
-                      type="number"
-                      min={0}
-                      step={1}
-                      defaultValue={avgRespCommon ?? ''}
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="00:00:00"
+                      defaultValue={avgRespCommon != null ? fmtSecondsHMS(avgRespCommon) : ''}
                       onClick={(e) => e.stopPropagation()}
                       onBlur={(e) => {
                         const v = e.currentTarget.value.trim()
-                        const n = v === '' ? null : Number(v)
-                        void saveAutomationCostsGroup(ids, {
-                          manual_avg_response_time: Number.isFinite(n as number) ? (n as number) : null,
-                        })
+                        if (v === '') {
+                          void saveAutomationCostsGroup(ids, { manual_avg_response_time: null })
+                          return
+                        }
+                        const n = parseSecondsHMSOrRaw(v)
+                        if (n == null) return
+                        void saveAutomationCostsGroup(ids, { manual_avg_response_time: n })
                       }}
                     />
                   </span>
@@ -1407,21 +1433,26 @@ export function DashboardPage() {
                         </div>
                       </div>
                       <div className="audit-city-metric">
-                        <div className="audit-city-lbl">{lang === 'ES' ? 'T. resp. medio (s)' : 'Avg resp time (s)'}</div>
+                        <div className="audit-city-lbl">{lang === 'ES' ? 'T. resp. medio' : 'Avg resp time'}</div>
                         <div className="audit-city-val">
                           <input
                             className="audit-input"
-                            type="number"
-                            min={0}
-                            step={1}
-                            defaultValue={manualAvgResp ?? ''}
+                            type="text"
+                            inputMode="numeric"
+                            autoComplete="off"
+                            spellCheck={false}
+                            placeholder="00:00:00"
+                            defaultValue={manualAvgResp != null ? fmtSecondsHMS(manualAvgResp) : ''}
                             onClick={(e) => e.stopPropagation()}
                             onBlur={(e) => {
                               const v = e.currentTarget.value.trim()
-                              const n = v === '' ? null : Number(v)
-                              void saveAutomationCosts(a.id, {
-                                manual_avg_response_time: Number.isFinite(n as number) ? (n as number) : null,
-                              })
+                              if (v === '') {
+                                void saveAutomationCosts(a.id, { manual_avg_response_time: null })
+                                return
+                              }
+                              const n = parseSecondsHMSOrRaw(v)
+                              if (n == null) return
+                              void saveAutomationCosts(a.id, { manual_avg_response_time: n })
                             }}
                           />
                         </div>
@@ -1454,7 +1485,7 @@ export function DashboardPage() {
   }
 
   // ── Live automation group row (task with per-city breakdown) ─────────────
-  function renderLiveGroupRow(groupKey: string, task: string, groupAutos: AutoWithRuns[]) {
+  function renderLiveGroupRow(groupKey: string, task: string, groupAutos: AutoWithSummary[]) {
     const ids = groupAutos.map((a) => a.id)
     const allTypeIds = Object.values(byAuto)
       .filter((a) => !isDiscoveryAutomation(a))
@@ -1463,11 +1494,15 @@ export function DashboardPage() {
         return splitTaskCity(base).task === task
       })
       .map((a) => a.id)
-    const allRuns = groupAutos.flatMap((a) => a.runs)
-    const totalRuns = allRuns.length
-    const avgRespS = totalRuns > 0 ? allRuns.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalRuns : 0
-    const timeSavedMins = groupAutos.reduce((s, a) => s + a.runs.length * (coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN), 0)
-    const lastCreatedAt = allRuns.length > 0 ? allRuns[0].created_at : null
+    const totalRuns = groupAutos.reduce((s, a) => s + (a.summary?.run_count ?? 0), 0)
+    const sumRespS = groupAutos.reduce((s, a) => s + (a.summary?.avg_response_s ?? 0) * (a.summary?.run_count ?? 0), 0)
+    const avgRespS = totalRuns > 0 ? sumRespS / totalRuns : 0
+    const timeSavedMins = groupAutos.reduce((s, a) => s + (a.summary?.run_count ?? 0) * (coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN), 0)
+    const lastCreatedAt = groupAutos.reduce((latest, a) => {
+      const t = a.summary?.last_run_at
+      if (!t) return latest
+      return !latest || t > latest ? t : latest
+    }, null as string | null)
 
     const hasLive = groupAutos.some((a) => (a.status ?? '').toString().toLowerCase() === 'live')
     const hasTesting = groupAutos.some((a) => (a.status ?? '').toString().toLowerCase() === 'testing')
@@ -1488,10 +1523,15 @@ export function DashboardPage() {
       return rows.reduce((s, r) => s + r.n * (r.avg ?? 0), 0) / denom
     })()
     const manualPerRun = manualMinsCommon != null && manualHourlyCommon != null ? (manualHourlyCommon * manualMinsCommon) / 60 : null
-    const actualGroupMonthsActive = allRuns.length > 0
-      ? Math.max((Date.now() - new Date(allRuns[allRuns.length - 1].created_at).getTime()) / (1000 * 60 * 60 * 24 * 30.44), 1 / 30.44)
+    const groupFirstRunAt = groupAutos.reduce((oldest, a) => {
+      const f = a.summary?.first_run_at
+      if (!f) return oldest
+      return !oldest || f < oldest ? f : oldest
+    }, null as string | null)
+    const actualGroupMonthsActive = groupFirstRunAt != null
+      ? Math.max((Date.now() - new Date(groupFirstRunAt).getTime()) / (1000 * 60 * 60 * 24 * 30.44), 1 / 30.44)
       : null
-    const actualGroupRunsPerMonth = actualGroupMonthsActive != null ? allRuns.length / actualGroupMonthsActive : null
+    const actualGroupRunsPerMonth = actualGroupMonthsActive != null ? totalRuns / actualGroupMonthsActive : null
     const manualMonthly = manualPerRun != null && actualGroupRunsPerMonth != null ? manualPerRun * actualGroupRunsPerMonth : null
 
     let groupTotalSavings: number | null = null
@@ -1531,6 +1571,10 @@ export function DashboardPage() {
             <div className="team-member-role">{lang === 'ES' ? 'Tarea' : 'Task'}</div>
           </div>
           <div className="auto-stat">
+            <small>{t.deployment}</small>
+            <span className="val">{formatDeployedAt(earliestCreatedAtIso(groupAutos))}</span>
+          </div>
+          <div className="auto-stat">
             <small>{t.msgs}</small>
             <span className="val">{totalRuns}</span>
           </div>
@@ -1559,6 +1603,7 @@ export function DashboardPage() {
             <button
               type="button"
               className="strip-head strip-head-btn"
+              style={{ backgroundColor: brandBg, color: 'var(--text2)' }}
               onClick={(e) => {
                 e.stopPropagation()
                 setOpenInputsGroupIds((prev) => {
@@ -1653,42 +1698,20 @@ export function DashboardPage() {
               {groupAutos.map((a) => {
                 const base = baseNameForGrouping(a)
                 const { city } = splitTaskCity(base)
-                const cityRuns = a.runs.length
-                const cityAvg = cityRuns > 0 ? a.runs.reduce((s, r) => s + (r.response_time ?? 0), 0) / cityRuns : null
+                const citySm = a.summary
+                const cityRuns = citySm?.run_count ?? 0
+                const cityAvg = citySm && citySm.avg_response_s > 0 ? citySm.avg_response_s : null
                 const citySavings = autoTotalSavings(a)
                 const isCityOpen = openCityIds.has(a.id)
 
-                const cityRepliesByDayL10D = (() => {
-                  const m: Record<string, number> = {}
-                  for (const x of a.runs) {
-                    const d = new Date(x.created_at)
-                    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-                    m[key] = (m[key] ?? 0) + 1
-                  }
-                  return last10DayKeys.map((k) => m[k] ?? 0)
-                })()
+                const emptyDayCity = { day: '', run_count: 0, avg_resp_s: 0, saved_mins: 0 }
+                const cityDaily = citySm?.daily_l10d ?? last10DayKeys.map(() => emptyDayCity)
+                const cityRepliesByDayL10D   = cityDaily.map((d) => d.run_count)
+                const cityAvgRespByDayL10D   = cityDaily.map((d) => d.avg_resp_s)
+                const citySavedMinsByDayL10D = cityDaily.map((d) => d.saved_mins)
 
-                const cityAvgRespByDayL10D = (() => {
-                  const m: Record<string, { total: number; timeSum: number }> = {}
-                  for (const x of a.runs) {
-                    const d = new Date(x.created_at)
-                    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-                    m[key] ??= { total: 0, timeSum: 0 }
-                    m[key].total++
-                    m[key].timeSum += x.response_time ?? 0
-                  }
-                  return last10DayKeys.map((k) => {
-                    const v = m[k]
-                    if (!v || v.total === 0) return 0
-                    return v.timeSum / v.total
-                  })
-                })()
-
-                const cityMinsPerRun = coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN
-                const citySavedMinsByDayL10D = cityRepliesByDayL10D.map((cnt) => cnt * cityMinsPerRun)
-
-                const maxCityRepliesL10D = Math.max(...cityRepliesByDayL10D, 1)
-                const maxCityAvgRespL10D = Math.max(...cityAvgRespByDayL10D, 1)
+                const maxCityRepliesL10D   = Math.max(...cityRepliesByDayL10D, 1)
+                const maxCityAvgRespL10D   = Math.max(...cityAvgRespByDayL10D, 1)
                 const maxCitySavedMinsL10D = Math.max(...citySavedMinsByDayL10D, 1)
 
                 const cityStatusLower = (a.status ?? '').toString().toLowerCase()
@@ -1716,6 +1739,10 @@ export function DashboardPage() {
                         </span>
                       </div>
                       <div className="auto-stat">
+                        <small>{t.deployment}</small>
+                        <span className="val">{formatDeployedAt(a.created_at)}</span>
+                      </div>
+                      <div className="auto-stat">
                         <small>{t.msgs}</small>
                         <span className="val">{cityRuns > 0 ? cityRuns : '-'}</span>
                       </div>
@@ -1733,7 +1760,7 @@ export function DashboardPage() {
                       </div>
                       <div className="auto-stat">
                         <small>{t.lastMsg}</small>
-                        <span className="val">{a.runs.length > 0 ? relLang(a.runs[0].created_at) : '-'}</span>
+                        <span className="val">{citySm?.last_run_at ? relLang(citySm.last_run_at) : '-'}</span>
                       </div>
                       {chevronSvg()}
                     </div>
@@ -1746,6 +1773,7 @@ export function DashboardPage() {
                             <button
                               type="button"
                               className="strip-head strip-head-btn"
+                              style={{ backgroundColor: brandBg, color: 'var(--text2)' }}
                               onClick={(e) => {
                                 e.stopPropagation()
                                 setOpenInputsCityIds((prev) => {
@@ -1837,7 +1865,7 @@ export function DashboardPage() {
                               return (
                                 <div className="mini-bar-g" key={last10DayKeys[i]}>
                                   <div className="mini-bar-track">
-                                    <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                                    <div className={`mini-bar ${cnt === 0 ? 'zero' : ''}`} style={chartBarFillStyle(pct, cnt === 0, brandHex)}>
                                       <div className="mini-bar-v">{cnt > 0 ? `${cnt}` : ''}</div>
                                     </div>
                                   </div>
@@ -1855,7 +1883,7 @@ export function DashboardPage() {
                               return (
                                 <div className="mini-bar-g" key={last10DayKeys[i]}>
                                   <div className="mini-bar-track">
-                                    <div className={`mini-bar ${mins === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                                    <div className={`mini-bar ${mins === 0 ? 'zero' : ''}`} style={chartBarFillStyle(pct, mins === 0, brandHex)}>
                                       <div className="mini-bar-v">{mins > 0 ? fmtTime(mins) : ''}</div>
                                     </div>
                                   </div>
@@ -1873,7 +1901,7 @@ export function DashboardPage() {
                               return (
                                 <div className="mini-bar-g" key={last10DayKeys[i]}>
                                   <div className="mini-bar-track">
-                                    <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={{ height: `${pct}%` }}>
+                                    <div className={`mini-bar ${avg === 0 ? 'zero' : ''}`} style={chartBarFillStyle(pct, avg === 0, brandHex)}>
                                       <div className="mini-bar-v">{avg > 0 ? `${avg.toFixed(0)}s` : ''}</div>
                                     </div>
                                   </div>
@@ -1898,11 +1926,11 @@ export function DashboardPage() {
   // ── Team member renderer (DB-driven) ─────────────────────────────────────
   function renderTeamMember(member: TeamMember) {
     const ids = memberAutomationIds[member.id] ?? []
-    const memberAutos = (ids.map((id) => byAuto[id]).filter(Boolean) as AutoWithRuns[]).filter((a) => !isDiscoveryAutomation(a))
-    const memberRuns = memberAutos.flatMap((a) => a.runs)
-    const totalReplies = memberRuns.length
-    const avgRespS = totalReplies > 0 ? memberRuns.reduce((s, r) => s + (r.response_time ?? 0), 0) / totalReplies : 0
-    const timeSavedMins = memberAutos.reduce((s, a) => s + a.runs.length * (coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN), 0)
+    const memberAutos = (ids.map((id) => byAuto[id]).filter(Boolean) as AutoWithSummary[]).filter((a) => !isDiscoveryAutomation(a))
+    const totalReplies = memberAutos.reduce((s, a) => s + (a.summary?.run_count ?? 0), 0)
+    const sumRespS = memberAutos.reduce((s, a) => s + (a.summary?.avg_response_s ?? 0) * (a.summary?.run_count ?? 0), 0)
+    const avgRespS = totalReplies > 0 ? sumRespS / totalReplies : 0
+    const timeSavedMins = memberAutos.reduce((s, a) => s + (a.summary?.run_count ?? 0) * (coerceFiniteNumber(a.manual_execution_time_min) ?? COST_ASSUMPTIONS.MANUAL_MINS_PER_RUN), 0)
     const perfPct = avgRespS > 0 ? ((COST_ASSUMPTIONS.MANUAL_RESPONSE_S - avgRespS) / COST_ASSUMPTIONS.MANUAL_RESPONSE_S) * 100 : 0
     const memberSavings = (() => {
       let total: number | null = null
@@ -1984,7 +2012,7 @@ export function DashboardPage() {
             ) : memberAutos.length > 0 ? (
               <div className="auto-list">
                 {(() => {
-                  const groups = new Map<string, AutoWithRuns[]>()
+                  const groups = new Map<string, AutoWithSummary[]>()
                   for (const a of memberAutos) {
                     const base = baseNameForGrouping(a)
                     const { task } = splitTaskCity(base)
@@ -2067,6 +2095,7 @@ export function DashboardPage() {
         ['--brand-bg' as never]: brandBg,
         ['--green' as never]: brandHex,
         ['--green-bg' as never]: brandBg,
+        ['--chart-bar' as never]: brandHex,
       }}
     >
       <header className="header">
@@ -2262,7 +2291,7 @@ export function DashboardPage() {
             </div>
             <div className="kpi highlight">
               <div className="kpi-val" id="kTotalConvos">
-                {uniqueCustomers > 0 ? uniqueCustomers : '-'}
+                {clientKpis != null ? clientKpis.total_customers : '-'}
               </div>
               <div className="kpi-lbl">{t.totalConversations}</div>
             </div>
@@ -2318,7 +2347,7 @@ export function DashboardPage() {
         <div className="wrap">
           {error ? (
             <div className="error-msg">Failed to load. {error}</div>
-          ) : !loading && autos.length === 0 && runs.length === 0 ? (
+          ) : !loading && autos.length === 0 ? (
             <div className="error-msg" style={{ background: 'var(--red-bg)', color: 'var(--red)' }}>
               No rows are visible from Supabase. This usually means Row Level Security is enabled without a SELECT policy for the current access mode (anon).
             </div>
