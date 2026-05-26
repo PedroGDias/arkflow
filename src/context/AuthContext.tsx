@@ -138,11 +138,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let mounted = true
     sb.auth
       .getSession()
-      .then(async ({ data }) => {
+      .then(({ data }) => {
         if (!mounted) return
         setSession(data.session ?? null)
         if (data.session) {
-          await loadProfile(data.session.user.id)
+          // Defer: do NOT await Supabase calls inside this resolution chain in a
+          // way that can contend with the auth lock. A plain call is fine here.
+          void loadProfile(data.session.user.id)
         } else {
           setProfileChecked(true)
         }
@@ -155,12 +157,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setInitializing(false)
       })
 
-    const { data: sub } = sb.auth.onAuthStateChange(async (_evt, s) => {
+    // IMPORTANT: this callback runs while supabase-js holds its auth lock.
+    // Calling another Supabase function (e.g. our whoami RPC) *synchronously*
+    // or with await here deadlocks the lock — getSession() then never resolves
+    // and the app hangs on a blank screen. Defer the profile load with
+    // setTimeout(0) so it runs after the lock is released, and keep this
+    // callback itself synchronous.
+    const { data: sub } = sb.auth.onAuthStateChange((_evt, s) => {
       setSession(s)
       if (s) {
-        // Mark profile as "not yet checked" so ProtectedRoute waits, then load.
         setProfileChecked(false)
-        await loadProfile(s.user.id)
+        setTimeout(() => {
+          if (mounted) void loadProfile(s.user.id)
+        }, 0)
       } else {
         setProfile(null)
         setAccessibleClientIds(null)
