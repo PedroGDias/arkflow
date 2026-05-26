@@ -4,28 +4,23 @@ import { useAuth } from '../context/AuthContext'
 import { env } from '../lib/env'
 
 export function LoginPage() {
-  const { session, initializing, signInWithGoogle, signInWithEmail, signOut, accounts } = useAuth()
+  const { session, initializing, profileChecked, isLockedOut, profileError, signInWithGoogle, signInWithEmail, signOut, accounts } = useAuth()
   const nav = useNavigate()
   const loc = useLocation()
   const [err, setErr] = useState<string | null>(null)
   const [email, setEmail] = useState('')
   const [sendingLink, setSendingLink] = useState(false)
   const [linkSentTo, setLinkSentTo] = useState<string | null>(null)
-  const locked = (loc.state as { locked?: boolean } | null)?.locked === true
 
+  // If we land on /login while authenticated and the profile is OK, bounce home.
   useEffect(() => {
     if (initializing) return
-    if (session && !locked) {
-      const from = (loc.state as { from?: string } | null)?.from
-      nav(from ?? '/', { replace: true })
-    }
-  }, [session, initializing, nav, loc.state, locked])
-
-  // If the user was redirected here because their profile is disabled,
-  // make sure no stale session is hanging around.
-  useEffect(() => {
-    if (locked) void signOut()
-  }, [locked, signOut])
+    if (!session) return
+    if (!profileChecked) return
+    if (isLockedOut) return
+    const from = (loc.state as { from?: string } | null)?.from
+    nav(from ?? '/', { replace: true })
+  }, [session, initializing, profileChecked, isLockedOut, nav, loc.state])
 
   if (env.authMode === 'mock') {
     return (
@@ -79,9 +74,23 @@ export function LoginPage() {
           Sign in to view your dashboard
         </div>
 
-        {locked ? (
+        {isLockedOut ? (
           <div className="error-msg" style={{ marginBottom: 12 }}>
-            This account doesn’t have access yet. Please ask an Arkflow admin to invite you.
+            <div>This account doesn’t have access yet. Please ask an Arkflow admin to invite you.</div>
+            {profileError ? (
+              <div style={{ marginTop: 8, fontSize: 11, opacity: 0.8 }}>
+                Debug: {profileError}
+              </div>
+            ) : null}
+            <button
+              onClick={() => void signOut()}
+              style={{
+                marginTop: 10, padding: '6px 10px', fontFamily: 'var(--mono)', fontSize: 11,
+                border: '1px solid currentColor', background: 'transparent', cursor: 'pointer', color: 'inherit', borderRadius: 6,
+              }}
+            >
+              Sign out and try another account
+            </button>
           </div>
         ) : null}
 

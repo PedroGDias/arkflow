@@ -9,15 +9,18 @@ type Props = {
 }
 
 export function ProtectedRoute({ children, requireRole }: Props) {
-  const { session, initializing, profile, isLockedOut, isInternal } = useAuth()
+  const { session, initializing, profileChecked, isLockedOut, isInternal } = useAuth()
   const loc = useLocation()
 
   if (initializing) return null
   if (!session) return <Navigate to="/login" replace state={{ from: loc.pathname }} />
-  if (isLockedOut) return <Navigate to="/login" replace state={{ locked: true }} />
+
+  // Wait for the profile load to resolve before deciding lockout/role.
+  // Otherwise the user briefly looks "locked out" between session-established
+  // and profile-loaded, and we'd bounce them back to /login in a loop.
+  if (!profileChecked) return null
+
+  if (isLockedOut) return <Navigate to="/login" replace />
   if (requireRole === 'internal' && !isInternal) return <Navigate to="/" replace />
-  // profile may still be loading on the very first render after sign-in;
-  // we let the children render anyway — the child will refetch with RLS.
-  void profile
   return children
 }

@@ -19,12 +19,16 @@ type AuthState = {
   session: (Session | MockSession) | null
   initializing: boolean
   profile: Profile | null
+  /** True once the profile load has resolved (success or failure) for the current session. */
+  profileChecked: boolean
   /** Client ids the current user can access. For internal users this is `null` (= all). */
   accessibleClientIds: number[] | null
   /** True when profile.role === 'internal' and not disabled. */
   isInternal: boolean
   /** True when the user signed in but has no usable profile (disabled / not yet provisioned). */
   isLockedOut: boolean
+  /** Error from the profile lookup, surfaced for debugging. */
+  profileError: string | null
   signInWithGoogle: () => Promise<void>
   signInWithEmail: (email: string) => Promise<void>
   signOut: () => Promise<void>
@@ -43,34 +47,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<(Session | MockSession) | null>(null)
   const [initializing, setInitializing] = useState(true)
   const [profile, setProfile] = useState<Profile | null>(null)
+  const [profileChecked, setProfileChecked] = useState(false)
   const [accessibleClientIds, setAccessibleClientIds] = useState<number[] | null>(null)
+  const [profileError, setProfileError] = useState<string | null>(null)
 
   const loadProfile = useCallback(async (userId: string) => {
-    if (!supabase) return
+    if (!supabase) {
+      setProfileChecked(true)
+      return
+    }
     const sb = supabase
 
-    const pRes = await sb
-      .from('profiles')
-      .select('id,email,role,full_name,disabled_at')
-      .eq('id', userId)
-      .maybeSingle()
-    const prof = (pRes.data ?? null) as Profile | null
-    setProfile(prof)
+    try {
+      const pRes = await sb
+        .from('profiles')
+        .select('id,email,role,full_name,disabled_at')
+        .eq('id', userId)
+        .maybeSingle()
 
-    if (!prof || prof.disabled_at) {
-      setAccessibleClientIds([])
-      return
+      if (pRes.error) {
+        console.error('[auth] profile lookup failed', pRes.error)
+        setProfileError(`${pRes.error.code ?? ''} ${pRes.error.message}`.trim())
+        setProfile(null)
+        setAccessibleClientIds([])
+        return
+      }
+
+      setProfileError(null)
+      const prof = (pRes.data ?? null) as Profile | null
+      setProfile(prof)
+
+      if (!prof) {
+        console.warn('[auth] no profile row for user', userId)
+        setAccessibleClientIds([])
+        return
+      }
+      if (prof.disabled_at) {
+        setAccessibleClientIds([])
+        return
+      }
+      if (prof.role === 'internal') {
+        setAccessibleClientIds(null)
+        return
+      }
+      const cuRes = await sb
+        .from('client_users')
+        .select('client_id')
+        .eq('user_id', userId)
+      if (cuRes.error) {
+        console.error('[auth] client_users lookup failed', cuRes.error)
+      }
+      const ids = ((cuRes.data ?? []) as Array<{ client_id: number }>).map((r) => r.client_id)
+      setAccessibleClientIds(ids)
+    } finally {
+      setProfileChecked(true)
     }
-    if (prof.role === 'internal') {
-      setAccessibleClientIds(null)
-      return
-    }
-    const cuRes = await sb
-      .from('client_users')
-      .select('client_id')
-      .eq('user_id', userId)
-    const ids = ((cuRes.data ?? []) as Array<{ client_id: number }>).map((r) => r.client_id)
-    setAccessibleClientIds(ids)
   }, [])
 
   useEffect(() => {
@@ -80,12 +111,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Mock mode bypasses profiles — treat the configured account as internal.
       setProfile(email ? { id: 'mock', email, role: 'internal', full_name: null, disabled_at: null } : null)
       setAccessibleClientIds(email ? null : [])
+      setProfileChecked(true)
       setInitializing(false)
       return
     }
 
     if (!supabase) {
       setSession(null)
+      setProfileChecked(true)
       setInitializing(false)
       return
     }
@@ -97,22 +130,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(async ({ data }) => {
         if (!mounted) return
         setSession(data.session ?? null)
-        if (data.session) await loadProfile(data.session.user.id)
+        if (data.session) {
+          await loadProfile(data.session.user.id)
+        } else {
+          setProfileChecked(true)
+        }
         setInitializing(false)
       })
       .catch(() => {
         if (!mounted) return
         setSession(null)
+        setProfileChecked(true)
         setInitializing(false)
       })
 
-    const { data: sub } = sb.auth.onAuthStateChange((_evt, s) => {
+    const { data: sub } = sb.auth.onAuthStateChange(async (_evt, s) => {
       setSession(s)
       if (s) {
-        void loadProfile(s.user.id)
+        // Mark profile as "not yet checked" so ProtectedRoute waits, then load.
+        setProfileChecked(false)
+        await loadProfile(s.user.id)
       } else {
         setProfile(null)
         setAccessibleClientIds(null)
+        setProfileChecked(true)
       }
       setInitializing(false)
     })
@@ -125,14 +166,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AuthState>(() => {
     const isInternal = !!profile && profile.role === 'internal' && !profile.disabled_at
-    const isLockedOut = !!session && (!profile || !!profile.disabled_at)
+    // Only declare "locked out" once we've actually checked the profile.
+    const isLockedOut = !!session && profileChecked && (!profile || !!profile.disabled_at)
     return {
       session,
       initializing,
       profile,
+      profileChecked,
       accessibleClientIds,
       isInternal,
       isLockedOut,
+      profileError,
       accounts: ['pedro@arkflow.ai'],
       signInWithGoogle: async () => {
         if (env.authMode === 'mock') return
@@ -167,7 +211,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error) throw error
       },
     }
-  }, [session, initializing, profile, accessibleClientIds])
+  }, [session, initializing, profile, profileChecked, accessibleClientIds, profileError])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }
