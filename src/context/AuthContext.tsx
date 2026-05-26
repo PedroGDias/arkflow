@@ -59,29 +59,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const sb = supabase
 
     try {
-      const pRes = await sb
-        .from('profiles')
-        .select('id,email,role,full_name,disabled_at')
-        .eq('id', userId)
-        .maybeSingle()
+      // whoami() is a SECURITY DEFINER RPC that returns the caller's profile
+      // plus their accessible client ids. We use it instead of a direct
+      // profiles SELECT so we don't depend on RLS picking up the auth header.
+      const rpc = await sb.rpc('whoami')
 
-      if (pRes.error) {
-        console.error('[auth] profile lookup failed', pRes.error)
-        setProfileError(`${pRes.error.code ?? ''} ${pRes.error.message}`.trim())
+      if (rpc.error) {
+        console.error('[auth] whoami() failed', rpc.error)
+        setProfileError(`${rpc.error.code ?? ''} ${rpc.error.message}`.trim())
         setProfile(null)
         setAccessibleClientIds([])
         return
       }
 
-      setProfileError(null)
-      const prof = (pRes.data ?? null) as Profile | null
-      setProfile(prof)
+      type WhoamiRow = {
+        id: string
+        email: string
+        full_name: string | null
+        role: 'internal' | 'client'
+        disabled_at: string | null
+        accessible_clients: number[]
+      }
+      const rows = (rpc.data ?? []) as WhoamiRow[]
+      const row = rows[0] ?? null
 
-      if (!prof) {
-        console.warn('[auth] no profile row for user', userId)
+      setProfileError(null)
+
+      if (!row) {
+        console.warn('[auth] whoami returned no row for user', userId)
+        setProfile(null)
         setAccessibleClientIds([])
         return
       }
+
+      const prof: Profile = {
+        id: row.id,
+        email: row.email,
+        full_name: row.full_name,
+        role: row.role,
+        disabled_at: row.disabled_at,
+      }
+      setProfile(prof)
+
       if (prof.disabled_at) {
         setAccessibleClientIds([])
         return
@@ -90,15 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAccessibleClientIds(null)
         return
       }
-      const cuRes = await sb
-        .from('client_users')
-        .select('client_id')
-        .eq('user_id', userId)
-      if (cuRes.error) {
-        console.error('[auth] client_users lookup failed', cuRes.error)
-      }
-      const ids = ((cuRes.data ?? []) as Array<{ client_id: number }>).map((r) => r.client_id)
-      setAccessibleClientIds(ids)
+      setAccessibleClientIds(row.accessible_clients ?? [])
     } finally {
       setProfileChecked(true)
     }
