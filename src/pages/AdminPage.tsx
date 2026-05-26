@@ -47,26 +47,34 @@ export function AdminPage() {
     const sb = supabase
     setLoading(true)
     try {
-      const [cRes, pRes, mRes, iRes, aRes] = await Promise.all([
-        sb.from('clients').select('id,client_name').order('id'),
-        sb.from('profiles').select('id,email,full_name,role,disabled_at,created_at').order('created_at', { ascending: false }),
-        sb.from('client_users').select('user_id,client_id'),
-        sb.from('pending_invites').select('email,client_id,created_at').order('created_at', { ascending: false }),
-        sb.from('admin_emails').select('email,created_at').order('created_at', { ascending: true }),
-      ])
-      if (cRes.error) throw cRes.error
-      if (pRes.error) throw pRes.error
-      if (mRes.error) throw mRes.error
-      if (iRes.error) throw iRes.error
-      if (aRes.error) throw aRes.error
-      setClients((cRes.data ?? []) as ClientRow[])
-      setProfiles((pRes.data ?? []) as Profile[])
-      setMappings((mRes.data ?? []) as Mapping[])
-      setPending((iRes.data ?? []) as PendingInvite[])
-      setAdminEmails((aRes.data ?? []) as AdminEmail[])
+      // Single SECURITY DEFINER RPC that checks is_internal() server-side and
+      // returns all admin data. Avoids depending on five separate
+      // authenticated-RLS table reads from the browser.
+      const { data, error } = await sb.rpc('admin_overview')
+      if (error) throw error
+
+      const payload = (data ?? {}) as {
+        clients?: ClientRow[]
+        profiles?: Profile[]
+        client_users?: Mapping[]
+        pending_invites?: PendingInvite[]
+        admin_emails?: AdminEmail[]
+      }
+      setClients(payload.clients ?? [])
+      setProfiles(payload.profiles ?? [])
+      setMappings(payload.client_users ?? [])
+      setPending(payload.pending_invites ?? [])
+      setAdminEmails(payload.admin_emails ?? [])
       setLoadError(null)
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : 'Failed to load admin data')
+      let msg = 'Failed to load admin data'
+      if (e instanceof Error) msg = e.message
+      else if (e && typeof e === 'object') {
+        const pe = e as { message?: string; code?: string }
+        msg = [pe.message, pe.code ? `(${pe.code})` : null].filter(Boolean).join(' ') || msg
+      }
+      console.error('[admin] load failed', e)
+      setLoadError(msg)
     } finally {
       setLoading(false)
     }
