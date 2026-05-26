@@ -224,7 +224,7 @@ function saveLocalCurrency(cid: number, code: string) {
 
 // ── Component ──────────────────────────────────────────────────────────────
 export function DashboardPage() {
-  const { signOut } = useAuth()
+  const { signOut, isInternal } = useAuth()
   const { clientId: clientIdParam } = useParams<{ clientId: string }>()
   const navigate = useNavigate()
   const cid = Number(clientIdParam) || env.clientId
@@ -743,6 +743,7 @@ export function DashboardPage() {
     automationId: number,
     patch: Partial<Pick<Automation, 'manual_execution_time_min' | 'manual_hourly_cost' | 'auto_monthly_cost' | 'manual_sample_size' | 'manual_avg_response_time'>>,
   ) {
+    if (!isInternal) return
     if (!supabase) return
     const sb = supabase
     setAutos((prev) => prev.map((a) => (a.id === automationId ? { ...a, ...patch } : a)))
@@ -759,6 +760,7 @@ export function DashboardPage() {
     automationIds: number[],
     patch: Partial<Pick<Automation, 'manual_execution_time_min' | 'manual_hourly_cost' | 'auto_monthly_cost' | 'manual_sample_size' | 'manual_avg_response_time'>>,
   ) {
+    if (!isInternal) return
     if (!supabase) return
     if (automationIds.length === 0) return
     const sb = supabase
@@ -2096,6 +2098,7 @@ export function DashboardPage() {
 
   async function saveClientCurrency(code: CurrencyCode) {
     saveLocalCurrency(cid, code)
+    if (!isInternal) return
     if (!supabase) return
     await supabase.from('clients').update({ currency: code }).eq('id', cid)
   }
@@ -2107,6 +2110,7 @@ export function DashboardPage() {
     // Apply immediately — localStorage keeps it across reloads even if DB fails
     saveLocalBrand(cid, hex)
     setClient((prev) => (prev ? { ...prev, primary_brand_color: hex } : { id: cid, primary_brand_color: hex }))
+    if (!isInternal) return
     if (!supabase) return
     const res = await supabase.from('clients').update({ primary_brand_color: hex }).eq('id', cid).select('id,primary_brand_color').maybeSingle()
     if (res.error) {
@@ -2143,7 +2147,7 @@ export function DashboardPage() {
           </div>
           <div className="header-r">
             <div className="header-ctls">
-              <select
+              {isInternal && <select
                 className="hdr-ctl hdr-currency"
                 value={currencyCode}
                 onChange={(e) => {
@@ -2156,9 +2160,9 @@ export function DashboardPage() {
                 {CURRENCIES.map((c) => (
                   <option key={c.code} value={c.code}>{c.code}</option>
                 ))}
-              </select>
+              </select>}
 
-              <div className="brand-picker" ref={brandPickerWrapRef}>
+              {isInternal && <div className="brand-picker" ref={brandPickerWrapRef}>
                 <button
                   type="button"
                   className="hdr-ctl hdr-btn brand-btn"
@@ -2243,7 +2247,11 @@ export function DashboardPage() {
                     </div>
                   </div>
                 ) : null}
-              </div>
+              </div>}
+
+              {isInternal && <a className="hdr-ctl hdr-btn" href="/admin" style={{ textDecoration: 'none' }}>
+                {lang === 'ES' ? 'Admin' : 'Admin'}
+              </a>}
 
               <div className="hdr-seg">
                 <button

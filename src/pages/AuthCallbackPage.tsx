@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { isAllowedEmail } from '../lib/authz'
 import { env } from '../lib/env'
 import { supabase } from '../lib/supabase'
 
@@ -21,13 +20,7 @@ export function AuthCallbackPage() {
         if (!mounted) return
         if (error) throw error
         if (!data.session) throw new Error('No session after callback')
-
-        const email = data.session.user.email
-        if (!isAllowedEmail(email)) {
-          void sb.auth.signOut()
-          throw new Error('Please sign in with your @arkflow.ai Google account.')
-        }
-
+        // ProtectedRoute / role-aware routing handles where to land.
         nav('/', { replace: true })
       })
       .catch((e) => {
@@ -72,4 +65,3 @@ export function AuthCallbackPage() {
     </div>
   )
 }
-

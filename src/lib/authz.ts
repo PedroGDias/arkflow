@@ -1,10 +1,5 @@
+// Access control is now enforced by the database via the `profiles` table and
+// RLS (see supabase/migrations/20260526120000_profiles_and_client_access.sql).
+// This file is retained only for the constant referenced by older comments.
+
 export const ALLOWED_EMAIL_DOMAIN = 'arkflow.ai'
-
-export function isAllowedEmail(email: string | null | undefined): boolean {
-  if (!email) return false
-  const at = email.lastIndexOf('@')
-  if (at === -1) return false
-  const domain = email.slice(at + 1).toLowerCase()
-  return domain === ALLOWED_EMAIL_DOMAIN
-}
-
