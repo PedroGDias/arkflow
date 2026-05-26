@@ -161,6 +161,9 @@ export function ClientPickerPage() {
           <a className="logo" href="#">
             <img src="/logos/arkflow-logo.svg" alt="Arkflow" className="logo-img" />
           </a>
+          {/* Empty middle cell: the shared .header grid is 1fr|auto|1fr, so this
+              keeps the controls pinned to the right column (matches dashboard). */}
+          <div aria-hidden="true" />
           <div className="header-r">
             <div className="header-ctls">
               <div className="hdr-seg">
