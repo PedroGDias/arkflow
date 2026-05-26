@@ -647,7 +647,17 @@ export function DashboardPage() {
         setThreadDayCountsByAuto(null)
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load')
+      // Supabase/PostgREST errors are plain objects, not Error instances —
+      // pull out their message/code so the UI shows something actionable.
+      let msg = 'Failed to load'
+      if (e instanceof Error) {
+        msg = e.message
+      } else if (e && typeof e === 'object') {
+        const pe = e as { message?: string; code?: string; details?: string }
+        msg = [pe.message, pe.code ? `(${pe.code})` : null, pe.details].filter(Boolean).join(' ') || msg
+      }
+      console.error('[dashboard] load failed', e)
+      setError(msg)
     } finally {
       setLoading(false)
     }
