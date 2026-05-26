@@ -16,6 +16,7 @@ type Profile = {
 type ClientRow = { id: number; client_name: string | null }
 type Mapping = { user_id: string; client_id: number }
 type PendingInvite = { email: string; client_id: number; created_at: string }
+type AdminEmail = { email: string; created_at: string }
 
 export function AdminPage() {
   const { signOut, profile: meProfile } = useAuth()
@@ -27,6 +28,7 @@ export function AdminPage() {
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [mappings, setMappings] = useState<Mapping[]>([])
   const [pending, setPending] = useState<PendingInvite[]>([])
+  const [adminEmails, setAdminEmails] = useState<AdminEmail[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
@@ -36,25 +38,32 @@ export function AdminPage() {
   const [inviteMsg, setInviteMsg] = useState<string | null>(null)
   const [inviteErr, setInviteErr] = useState<string | null>(null)
 
+  const [newAdminEmail, setNewAdminEmail] = useState('')
+  const [adminErr, setAdminErr] = useState<string | null>(null)
+  const [adminMsg, setAdminMsg] = useState<string | null>(null)
+
   const load = useCallback(async () => {
     if (!supabase) return
     const sb = supabase
     setLoading(true)
     try {
-      const [cRes, pRes, mRes, iRes] = await Promise.all([
+      const [cRes, pRes, mRes, iRes, aRes] = await Promise.all([
         sb.from('clients').select('id,client_name').order('id'),
         sb.from('profiles').select('id,email,full_name,role,disabled_at,created_at').order('created_at', { ascending: false }),
         sb.from('client_users').select('user_id,client_id'),
         sb.from('pending_invites').select('email,client_id,created_at').order('created_at', { ascending: false }),
+        sb.from('admin_emails').select('email,created_at').order('created_at', { ascending: true }),
       ])
       if (cRes.error) throw cRes.error
       if (pRes.error) throw pRes.error
       if (mRes.error) throw mRes.error
       if (iRes.error) throw iRes.error
+      if (aRes.error) throw aRes.error
       setClients((cRes.data ?? []) as ClientRow[])
       setProfiles((pRes.data ?? []) as Profile[])
       setMappings((mRes.data ?? []) as Mapping[])
       setPending((iRes.data ?? []) as PendingInvite[])
+      setAdminEmails((aRes.data ?? []) as AdminEmail[])
       setLoadError(null)
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Failed to load admin data')
@@ -217,6 +226,83 @@ export function AdminPage() {
     }
   }
 
+  async function addAdmin() {
+    setAdminErr(null)
+    setAdminMsg(null)
+    const email = newAdminEmail.trim().toLowerCase()
+    if (!email || !email.includes('@')) { setAdminErr('Enter a valid email'); return }
+    if (!supabase) { setAdminErr('Supabase not configured'); return }
+
+    setBusy('add-admin')
+    try {
+      const insRes = await supabase
+        .from('admin_emails')
+        .upsert({ email }, { onConflict: 'email' })
+      if (insRes.error) throw insRes.error
+
+      // If this email already has a profile, promote it to internal/enabled
+      // immediately. Otherwise the auth trigger will handle it on first sign-in.
+      const existing = profiles.find((p) => p.email.toLowerCase() === email)
+      if (existing) {
+        const upRes = await supabase
+          .from('profiles')
+          .update({ role: 'internal', disabled_at: null })
+          .eq('id', existing.id)
+        if (upRes.error) throw upRes.error
+        setAdminMsg(`${email} promoted to admin.`)
+      } else {
+        setAdminMsg(`${email} added. They'll become an admin on first sign-in.`)
+      }
+      setNewAdminEmail('')
+      await load()
+    } catch (e) {
+      setAdminErr(e instanceof Error ? e.message : 'Failed to add admin')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function removeAdmin(email: string) {
+    if (!supabase) return
+    const normalized = email.toLowerCase()
+    if (normalized === meProfile?.email.toLowerCase()) {
+      setAdminErr("You can't remove yourself.")
+      return
+    }
+    // Guard: never remove the last active admin.
+    const otherActiveAdmins = profiles.filter(
+      (p) => p.role === 'internal' && !p.disabled_at && p.email.toLowerCase() !== normalized,
+    )
+    if (otherActiveAdmins.length === 0) {
+      setAdminErr("Can't remove the last active admin.")
+      return
+    }
+
+    setBusy(`rm-admin:${normalized}`)
+    setAdminErr(null)
+    try {
+      const delRes = await supabase.from('admin_emails').delete().eq('email', normalized)
+      if (delRes.error) throw delRes.error
+
+      // If they have an existing profile, demote to client (no access until
+      // explicitly assigned). Their session keeps working until they refresh.
+      const existing = profiles.find((p) => p.email.toLowerCase() === normalized)
+      if (existing) {
+        const upRes = await supabase
+          .from('profiles')
+          .update({ role: 'client' })
+          .eq('id', existing.id)
+        if (upRes.error) throw upRes.error
+      }
+      setAdminMsg(`${normalized} is no longer an admin.`)
+      await load()
+    } catch (e) {
+      setAdminErr(e instanceof Error ? e.message : 'Failed to remove admin')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   return (
     <div className="page">
       <header className="header">
@@ -239,6 +325,85 @@ export function AdminPage() {
           <h1>Access management</h1>
 
           {loadError ? <div className="error-msg" style={{ marginTop: 12 }}>{loadError}</div> : null}
+
+          {/* ── Admins ───────────────────────────────────────────────────── */}
+          <div style={card}>
+            <div style={cardHead}>Admins</div>
+
+            {(() => {
+              const adminEmailSet = new Set(adminEmails.map((a) => a.email.toLowerCase()))
+              const internalProfiles = profiles.filter((p) => p.role === 'internal' && !p.disabled_at)
+              const internalEmails = new Set(internalProfiles.map((p) => p.email.toLowerCase()))
+              const pendingAdmins = adminEmails.filter((a) => !internalEmails.has(a.email.toLowerCase()))
+              return (
+                <>
+                  <div style={{ display: 'grid', gap: 10 }}>
+                    {internalProfiles.map((p) => {
+                      const inAllowlist = adminEmailSet.has(p.email.toLowerCase())
+                      const isSelf = p.email.toLowerCase() === meProfile?.email.toLowerCase()
+                      return (
+                        <div key={p.id} style={{ ...rowStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                          <div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 13 }}>{p.email}</div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text4)' }}>
+                              {isSelf ? 'You · ' : ''}{inAllowlist ? 'allowlisted' : 'internal (domain rule)'}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => void removeAdmin(p.email)}
+                            disabled={isSelf || busy === `rm-admin:${p.email.toLowerCase()}`}
+                            style={{ ...subtleBtnStyle, color: 'var(--red, #c33)' }}
+                            title={isSelf ? "You can't remove yourself" : 'Remove admin'}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )
+                    })}
+
+                    {pendingAdmins.map((a) => (
+                      <div key={a.email} style={{ ...rowStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: 13 }}>{a.email}</div>
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text4)' }}>
+                            allowlisted · waiting for first sign-in
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => void removeAdmin(a.email)}
+                          disabled={busy === `rm-admin:${a.email.toLowerCase()}`}
+                          style={{ ...subtleBtnStyle, color: 'var(--red, #c33)' }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+                    <input
+                      type="email"
+                      placeholder="teammate@arkflow.ai"
+                      value={newAdminEmail}
+                      onChange={(e) => setNewAdminEmail(e.currentTarget.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void addAdmin() }}
+                      style={{ ...inputStyle, flex: 1, minWidth: 220 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void addAdmin()}
+                      disabled={busy === 'add-admin' || !newAdminEmail.trim()}
+                      style={primaryBtnStyle}
+                    >
+                      {busy === 'add-admin' ? 'Adding…' : 'Add admin'}
+                    </button>
+                  </div>
+                  {adminMsg ? <div style={{ marginTop: 8, color: 'var(--green)', fontSize: 12, fontFamily: 'var(--mono)' }}>{adminMsg}</div> : null}
+                  {adminErr ? <div className="error-msg" style={{ marginTop: 8 }}>{adminErr}</div> : null}
+                </>
+              )
+            })()}
+          </div>
 
           {/* ── Invite form ──────────────────────────────────────────────── */}
           <div style={card}>
