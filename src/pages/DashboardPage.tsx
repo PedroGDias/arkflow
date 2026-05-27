@@ -435,13 +435,12 @@ export function DashboardPage() {
   }, [])
 
   const l10dLabels = useMemo(() => {
-    const locale = lang === 'ES' ? 'es-ES' : 'en-GB'
-    return last10DayKeys.map((k) => {
-      const [yy, mm, dd] = k.split('-').map((v) => Number(v))
-      const d = new Date(yy, (mm ?? 1) - 1, dd ?? 1, 12, 0, 0)
-      return d.toLocaleDateString(locale, { day: '2-digit', month: 'short' })
-    })
-  }, [lang, last10DayKeys])
+    // Compact axis: 10 very narrow columns. Show just the day-of-month number so
+    // labels never collide at any width (the full "DD Mon" form repeated "May"
+    // ten times and overflowed/collided in the tight 3-up charts). The chart
+    // titles already scope these to the last 10 days.
+    return last10DayKeys.map((k) => String(Number(k.split('-')[2] ?? 1)))
+  }, [last10DayKeys])
 
   function relLang(iso: string) {
     if (lang === 'EN') return rel(iso)
@@ -2259,10 +2258,6 @@ export function DashboardPage() {
                 ) : null}
               </div>}
 
-              {isInternal && <a className="hdr-ctl hdr-btn" href="/admin" style={{ textDecoration: 'none' }}>
-                {lang === 'ES' ? 'Admin' : 'Admin'}
-              </a>}
-
               <div className="hdr-seg">
                 <button
                   onClick={() => setLang('EN')}
@@ -2283,6 +2278,10 @@ export function DashboardPage() {
               >
                 {t.signOut}
               </button>
+
+              {isInternal && <a className="hdr-ctl hdr-btn" href="/admin" style={{ textDecoration: 'none' }}>
+                {lang === 'ES' ? 'Admin' : 'Admin'}
+              </a>}
             </div>
           </div>
         </div>
