@@ -17,7 +17,7 @@ function statusLower(status: unknown) {
 type ClientRow = Pick<Client, 'id' | 'client_name' | 'logo_path'>
 
 export function ClientPickerPage() {
-  const { signOut } = useAuth()
+  const { signOut, isInternal } = useAuth()
   const navigate = useNavigate()
   const [lang, setLang] = useState<'EN' | 'ES'>('EN')
 
@@ -186,6 +186,10 @@ export function ClientPickerPage() {
               >
                 {lang === 'EN' ? 'Sign out' : 'Cerrar sesión'}
               </button>
+
+              {isInternal && <a className="hdr-ctl hdr-btn" href="/admin" style={{ textDecoration: 'none' }}>
+                Admin
+              </a>}
             </div>
           </div>
         </div>
