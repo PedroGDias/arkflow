@@ -312,7 +312,16 @@ export function AdminPage() {
   }
 
   return (
-    <div className="page">
+    // Arkflow-owned page (not client-scoped): use the neutral Arkflow identity
+    // (black / white / grey) instead of inheriting the default green brand.
+    <div
+      className="page"
+      style={{
+        ['--brand' as never]: 'var(--black)',
+        ['--brand-bg' as never]: 'var(--card)',
+        ['--chart-bar' as never]: 'var(--black)',
+      }}
+    >
       <header className="header">
         <div className="wrap">
           <a className="logo" href="/">

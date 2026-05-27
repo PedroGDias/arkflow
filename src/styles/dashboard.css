@@ -12,6 +12,9 @@
   --text4: #b4ada1;
   --border: #ddd7cb;
   --black: #34302a;
+  /* Darkest ink — the "selected/active" fill for neutral (non-brand) controls
+     such as the admin client-access toggles. */
+  --text1: var(--black);
   /* Client brand color (overridden per-client via inline CSS vars). */
   --brand: #1a7a3a;
   --brand-bg: #e4f2e8;
