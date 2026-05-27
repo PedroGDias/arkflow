@@ -224,7 +224,10 @@ function saveLocalCurrency(cid: number, code: string) {
 
 // ── Component ──────────────────────────────────────────────────────────────
 export function DashboardPage() {
-  const { signOut, isInternal } = useAuth()
+  const { signOut, isInternal, accessibleClientIds } = useAuth()
+  // Only users who can reach more than one client get the "All clients" link /
+  // picker. Single-client users never see the client overview page.
+  const canSwitchClients = isInternal || (accessibleClientIds?.length ?? 0) > 1
   const { clientId: clientIdParam } = useParams<{ clientId: string }>()
   const navigate = useNavigate()
   const cid = Number(clientIdParam) || env.clientId
@@ -2289,9 +2292,11 @@ export function DashboardPage() {
 
       <section className="topbar">
         <div className="wrap">
-          <button className="back-link" onClick={() => navigate('/')}>
-            {t.allClients}
-          </button>
+          {canSwitchClients && (
+            <button className="back-link" onClick={() => navigate('/')}>
+              {t.allClients}
+            </button>
+          )}
           <div className="topbar-label">{t.clientDashboard}</div>
           <h1>
             <img
