@@ -14,7 +14,7 @@ type Profile = {
 }
 
 type ClientRow = { id: number; client_name: string | null }
-type Mapping = { user_id: string; client_id: number }
+type Mapping = { user_id: string; client_id: number; can_manage?: boolean }
 type PendingInvite = { email: string; client_id: number; created_at: string }
 type AdminEmail = { email: string; created_at: string }
 
@@ -96,6 +96,13 @@ export function AdminPage() {
       m.set(row.user_id, list)
     }
     return m
+  }, [mappings])
+
+  // `${user_id}:${client_id}` for mappings flagged as members-manager.
+  const managerKeys = useMemo(() => {
+    const s = new Set<string>()
+    for (const row of mappings) if (row.can_manage) s.add(`${row.user_id}:${row.client_id}`)
+    return s
   }, [mappings])
 
   const pendingByEmail = useMemo(() => {
@@ -196,6 +203,26 @@ export function AdminPage() {
       await load()
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Failed to update access')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Flag/unflag a (user, client) mapping as a members-manager: that user can
+  // then invite/revoke other users for that client from /manage.
+  async function setUserClientManage(userId: string, clientId: number, canManage: boolean) {
+    if (!supabase) return
+    setBusy(`mgr:${userId}:${clientId}`)
+    try {
+      const res = await supabase
+        .from('client_users')
+        .update({ can_manage: canManage })
+        .eq('user_id', userId)
+        .eq('client_id', clientId)
+      if (res.error) throw res.error
+      await load()
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'Failed to update manager flag')
     } finally {
       setBusy(null)
     }
@@ -508,26 +535,59 @@ export function AdminPage() {
                         Internal user — sees all clients.
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                        {clients.map((c) => {
-                          const active = assigned.has(c.id)
-                          const k = `${p.id}:${c.id}`
-                          return (
-                            <button
-                              key={c.id}
-                              type="button"
-                              onClick={() => void setUserClient(p.id, c.id, !active)}
-                              disabled={busy === k}
-                              style={{
-                                ...pillStyle,
-                                background: active ? 'var(--text1)' : 'var(--white)',
-                                color: active ? 'var(--white)' : 'var(--text2)',
-                              }}
-                            >
-                              {c.client_name?.trim() || `Client ${c.id}`}
-                            </button>
-                          )
-                        })}
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text4)', marginBottom: 6 }}>Access</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {clients.map((c) => {
+                            const active = assigned.has(c.id)
+                            const k = `${p.id}:${c.id}`
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => void setUserClient(p.id, c.id, !active)}
+                                disabled={busy === k}
+                                style={{
+                                  ...pillStyle,
+                                  background: active ? 'var(--text1)' : 'var(--white)',
+                                  color: active ? 'var(--white)' : 'var(--text2)',
+                                }}
+                              >
+                                {c.client_name?.trim() || `Client ${c.id}`}
+                              </button>
+                            )
+                          })}
+                        </div>
+
+                        {assigned.size > 0 ? (
+                          <>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text4)', margin: '12px 0 6px' }}>
+                              Can manage members
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                              {clients.filter((c) => assigned.has(c.id)).map((c) => {
+                                const isMgr = managerKeys.has(`${p.id}:${c.id}`)
+                                const k = `mgr:${p.id}:${c.id}`
+                                return (
+                                  <button
+                                    key={c.id}
+                                    type="button"
+                                    onClick={() => void setUserClientManage(p.id, c.id, !isMgr)}
+                                    disabled={busy === k}
+                                    title={isMgr ? 'Manager — can invite/revoke others for this client' : 'Make a members-manager for this client'}
+                                    style={{
+                                      ...pillStyle,
+                                      background: isMgr ? 'var(--text1)' : 'var(--white)',
+                                      color: isMgr ? 'var(--white)' : 'var(--text2)',
+                                    }}
+                                  >
+                                    {isMgr ? '★ ' : ''}{c.client_name?.trim() || `Client ${c.id}`}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </>
+                        ) : null}
                       </div>
                     )}
                   </div>

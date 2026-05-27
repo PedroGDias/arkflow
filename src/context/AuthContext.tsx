@@ -23,6 +23,8 @@ type AuthState = {
   profileChecked: boolean
   /** Client ids the current user can access. For internal users this is `null` (= all). */
   accessibleClientIds: number[] | null
+  /** Client ids the current user can manage members for (client_users.can_manage). */
+  manageableClientIds: number[] | null
   /** True when profile.role === 'internal' and not disabled. */
   isInternal: boolean
   /** True when the user signed in but has no usable profile (disabled / not yet provisioned). */
@@ -49,6 +51,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [profileChecked, setProfileChecked] = useState(false)
   const [accessibleClientIds, setAccessibleClientIds] = useState<number[] | null>(null)
+  const [manageableClientIds, setManageableClientIds] = useState<number[] | null>(null)
   const [profileError, setProfileError] = useState<string | null>(null)
 
   const loadProfile = useCallback(async (userId: string) => {
@@ -69,6 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfileError(`${rpc.error.code ?? ''} ${rpc.error.message}`.trim())
         setProfile(null)
         setAccessibleClientIds([])
+        setManageableClientIds([])
         return
       }
 
@@ -79,6 +83,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         role: 'internal' | 'client'
         disabled_at: string | null
         accessible_clients: number[]
+        manageable_clients: number[]
       }
       const rows = (rpc.data ?? []) as WhoamiRow[]
       const row = rows[0] ?? null
@@ -89,6 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.warn('[auth] whoami returned no row for user', userId)
         setProfile(null)
         setAccessibleClientIds([])
+        setManageableClientIds([])
         return
       }
 
@@ -103,13 +109,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (prof.disabled_at) {
         setAccessibleClientIds([])
+        setManageableClientIds([])
         return
       }
       if (prof.role === 'internal') {
         setAccessibleClientIds(null)
+        setManageableClientIds(row.manageable_clients ?? null)
         return
       }
       setAccessibleClientIds(row.accessible_clients ?? [])
+      setManageableClientIds(row.manageable_clients ?? [])
     } finally {
       setProfileChecked(true)
     }
@@ -122,6 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Mock mode bypasses profiles — treat the configured account as internal.
       setProfile(email ? { id: 'mock', email, role: 'internal', full_name: null, disabled_at: null } : null)
       setAccessibleClientIds(email ? null : [])
+      setManageableClientIds(email ? null : [])
       setProfileChecked(true)
       setInitializing(false)
       return
@@ -194,6 +204,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       profile,
       profileChecked,
       accessibleClientIds,
+      manageableClientIds,
       isInternal,
       isLockedOut,
       profileError,
@@ -231,7 +242,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error) throw error
       },
     }
-  }, [session, initializing, profile, profileChecked, accessibleClientIds, profileError])
+  }, [session, initializing, profile, profileChecked, accessibleClientIds, manageableClientIds, profileError])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

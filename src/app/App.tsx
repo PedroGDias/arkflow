@@ -3,6 +3,7 @@ import { LoginPage } from '../pages/LoginPage'
 import { DashboardPage } from '../pages/DashboardPage'
 import { ClientPickerPage } from '../pages/ClientPickerPage'
 import { AdminPage } from '../pages/AdminPage'
+import { ClientTeamPage } from '../pages/ClientTeamPage'
 import { ProtectedRoute } from './ProtectedRoute'
 import { AuthCallbackPage } from '../pages/AuthCallbackPage'
 import { useAuth } from '../context/AuthContext'
@@ -53,6 +54,14 @@ export function App() {
         element={
           <ProtectedRoute requireRole="internal">
             <AdminPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/manage"
+        element={
+          <ProtectedRoute>
+            <ClientTeamPage />
           </ProtectedRoute>
         }
       />

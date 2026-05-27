@@ -224,10 +224,13 @@ function saveLocalCurrency(cid: number, code: string) {
 
 // ── Component ──────────────────────────────────────────────────────────────
 export function DashboardPage() {
-  const { signOut, isInternal, accessibleClientIds } = useAuth()
+  const { signOut, isInternal, accessibleClientIds, manageableClientIds } = useAuth()
   // Only users who can reach more than one client get the "All clients" link /
   // picker. Single-client users never see the client overview page.
   const canSwitchClients = isInternal || (accessibleClientIds?.length ?? 0) > 1
+  // Designated client-side managers (non-internal) get a "Manage access" link.
+  // Internal users use the full /admin page instead.
+  const canManageMembers = !isInternal && (manageableClientIds?.length ?? 0) > 0
   const { clientId: clientIdParam } = useParams<{ clientId: string }>()
   const navigate = useNavigate()
   const cid = Number(clientIdParam) || env.clientId
@@ -2284,6 +2287,10 @@ export function DashboardPage() {
 
               {isInternal && <a className="hdr-ctl hdr-btn" href="/admin" style={{ textDecoration: 'none' }}>
                 {lang === 'ES' ? 'Admin' : 'Admin'}
+              </a>}
+
+              {canManageMembers && <a className="hdr-ctl hdr-btn" href="/manage" style={{ textDecoration: 'none' }}>
+                {lang === 'ES' ? 'Gestionar acceso' : 'Manage access'}
               </a>}
             </div>
           </div>
