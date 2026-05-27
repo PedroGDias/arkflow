@@ -283,6 +283,8 @@ body {
   box-shadow: var(--shadow-card);
 }
 .kpi { background: var(--white); padding: 12px 16px 10px; }
+/* KPIs carry a `title` explanation — hint it's hoverable. */
+.kpi[title] { cursor: help; }
 .kpi.highlight { background: var(--black); }
 .kpi.highlight .kpi-val { color: var(--white); }
 .kpi.highlight .kpi-lbl { color: rgba(255,255,255,0.65); }

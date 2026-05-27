@@ -2334,31 +2334,31 @@ export function DashboardPage() {
           )}
 
           {activeTab === 'team' && <div className="kpis">
-            <div className="kpi">
+            <div className="kpi" title={t.avgRespHow}>
               <div className="kpi-val green" id="kAvgResp">
                 {kpis.avgRespS > 0 ? `${kpis.avgRespS.toFixed(0)}s` : '-'}
               </div>
               <div className="kpi-lbl">{t.avgResponseTime}</div>
             </div>
-            <div className="kpi">
+            <div className="kpi" title={t.timeSavedHow}>
               <div className="kpi-val green" id="kTimeSaved">
                 {fmtTime(kpis.timeSavedMins)}
               </div>
               <div className="kpi-lbl">{t.timeSaved}</div>
             </div>
-            <div className="kpi">
+            <div className="kpi" title={t.totalSavingsHow.replace(/<[^>]*>/g, '')}>
               <div className={`kpi-val ${clientTotalSavings != null && clientTotalSavings > 0 ? 'green' : ''}`} id="kSavings">
                 {clientTotalSavings != null ? fmtC(clientTotalSavings) : '-'}
               </div>
               <div className="kpi-lbl">{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</div>
             </div>
-            <div className="kpi highlight">
+            <div className="kpi highlight" title={t.totalConversationsHow}>
               <div className="kpi-val" id="kTotalConvos">
                 {clientKpis != null ? clientKpis.total_customers : '-'}
               </div>
               <div className="kpi-lbl">{t.totalConversations}</div>
             </div>
-            <div className="kpi highlight">
+            <div className="kpi highlight" title={t.finishedHow}>
               <div className="kpi-val" id="kFinishedPct">
                 {totalThreads != null && totalThreads > 0
                   ? `${finishedPct.toFixed(0)}% (${completedThreads ?? 0}/${totalThreads})`
