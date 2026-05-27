@@ -192,6 +192,9 @@ $$;
 grant execute on function public.revoke_client_invite(text, bigint) to authenticated;
 
 -- ── 7. whoami() also returns the clients the caller can manage ─────────────
+-- Adding a column changes the RETURNS TABLE shape, so the old function must be
+-- dropped first (CREATE OR REPLACE can't change a function's return type).
+drop function if exists public.whoami();
 create or replace function public.whoami()
 returns table (
   id                  uuid,
