@@ -268,6 +268,16 @@ max_frequency = "5s"
 # enabled = true
 # uri = "pg-functions://<database>/<schema>/<hook_name>"
 
+# Send Email hook → routes all auth emails through the `send-email` edge function
+# (which sends via the Gmail API). On the HOSTED project this is configured in the
+# dashboard (Authentication → Hooks). Locally, uncomment below and put the same
+# secrets in supabase/.env so `supabase start` exercises the same path; leave it
+# commented to keep local dev on the Inbucket test inbox.
+# [auth.hook.send_email]
+# enabled = true
+# uri = "http://host.docker.internal:54321/functions/v1/send-email"
+# secrets = "env(SEND_EMAIL_HOOK_SECRET)"
+
 # Configure one of the supported SMS providers: `twilio`, `twilio_verify`, `messagebird`, `textlocal`, `vonage`.
 [auth.sms.twilio]
 enabled = false
@@ -353,6 +363,12 @@ enabled = false
 authorization_url_path = "/oauth/consent"
 # Allow dynamic client registration
 allow_dynamic_registration = false
+
+# The Send Email hook calls this function server-to-server with a Standard
+# Webhooks signature (not a user JWT), so JWT verification must be off.
+[functions.send-email]
+enabled = true
+verify_jwt = false
 
 [edge_runtime]
 enabled = true
