@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase'
 import type { Automation, AutomationSummary, Client, ClientKpis, Run, TeamMember } from '../lib/types'
 import { clientLogoUrl, uploadClientLogo } from '../lib/clientLogos'
 import { COST_ASSUMPTIONS, fmtTime, rel } from '../lib/roiMath'
+import { Tooltip } from '../components/Tooltip'
 
 type AutoWithSummary = Automation & { summary: AutomationSummary | null }
 
@@ -251,7 +252,8 @@ export function DashboardPage() {
   const [autoSummaries, setAutoSummaries] = useState<Record<number, AutomationSummary>>({})
   const [threadTotalsAll, setThreadTotalsAll] = useState<{ total: number | null; completed: number | null }>({ total: null, completed: null })
   const [threadTotalsByAuto, setThreadTotalsByAuto] = useState<Record<number, { total: number; completed: number }> | null>(null)
-  const [threadDayCountsByAuto, setThreadDayCountsByAuto] = useState<Record<number, Record<string, number>> | null>(null)
+  // Per-automation 10-element daily counts, oldest→today (index 0 = 9 days ago).
+  const [threadDayCountsByAuto, setThreadDayCountsByAuto] = useState<Record<number, number[]> | null>(null)
 
   useEffect(() => {
     const name = client?.client_name?.trim() ? client.client_name : `Client ${cid}`
@@ -367,6 +369,8 @@ export function DashboardPage() {
         avg: 'Avg',
         saved: 'Time Saved',
         perf: 'Perf',
+        workerRepliesHow: "Total replies this worker handled in production — the sum of runs across all their automations (discovery excluded).",
+        workerPerfHow: 'How much faster than the 5-minute manual baseline this worker responds, as a percentage — higher is better.',
         lastMsg: 'Last Reply',
         deployment: 'Deployed',
         justNow: 'just now',
@@ -416,6 +420,8 @@ export function DashboardPage() {
         avg: 'Media',
         saved: 'Tiempo ahorrado',
         perf: 'Rend.',
+        workerRepliesHow: 'Total de respuestas gestionadas por este trabajador en producción — la suma de ejecuciones de todas sus automatizaciones (discovery excluido).',
+        workerPerfHow: 'Cuánto más rápido responde este trabajador frente a la línea base manual de 5 minutos, en porcentaje — más alto es mejor.',
         lastMsg: 'Última respuesta',
         deployment: 'Desplegado',
         justNow: 'ahora mismo',
@@ -596,51 +602,29 @@ export function DashboardPage() {
       for (const k of Object.keys(map)) map[Number(k)].sort((x, y) => x - y)
       setMemberAutomationIds(map)
 
+      // Thread stats are aggregated server-side. A previous client-side
+      // fetch-and-count was silently capped at PostgREST's 1000-row limit,
+      // which truncated totals (e.g. completion read "806/1000").
       try {
-        const sinceIso = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString()
-        const batchSize = 5000
-        const maxRows = 100000
-        const autoIds = ((aRes.data ?? []) as Automation[]).map((a) => a.id)
-
-        const rows: Array<{ automation_id: number; status: string | null; created_at: string }> = []
-        if (autoIds.length === 0) {
-          setThreadTotalsAll({ total: 0, completed: 0 })
-          setThreadTotalsByAuto({})
-          setThreadDayCountsByAuto({})
-          return
-        }
-        for (let offset = 0; offset < maxRows; offset += batchSize) {
-          const res = await sb
-            .from('julia_thread_stats_prod')
-            .select('automation_id,status,created_at')
-            .in('automation_id', autoIds)
-            .order('created_at', { ascending: false })
-            .range(offset, offset + batchSize - 1)
-
-          if (res.error) throw res.error
-          const batch = (res.data ?? []) as unknown as Array<{ automation_id: number; status: string | null; created_at: string }>
-          rows.push(...batch)
-          if (batch.length < batchSize) break
-        }
+        const statsRes = await sb.rpc('get_thread_stats', { p_client_id: cid })
+        if (statsRes.error) throw statsRes.error
+        const statRows = (statsRes.data ?? []) as Array<{
+          automation_id: number
+          total: number
+          completed: number
+          daily_l10d: number[]
+        }>
 
         const totalsByAuto: Record<number, { total: number; completed: number }> = {}
-        const dayCountsByAuto: Record<number, Record<string, number>> = {}
+        const dayCountsByAuto: Record<number, number[]> = {}
         let totalAll = 0
         let completedAll = 0
 
-        for (const row of rows) {
-          totalAll++
-          if (row.status === 'completed') completedAll++
-          const aid = row.automation_id
-          totalsByAuto[aid] ??= { total: 0, completed: 0 }
-          totalsByAuto[aid].total++
-          if (row.status === 'completed') totalsByAuto[aid].completed++
-          if (row.created_at >= sinceIso) {
-            const d = new Date(row.created_at)
-            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-            dayCountsByAuto[aid] ??= {}
-            dayCountsByAuto[aid][key] = (dayCountsByAuto[aid][key] ?? 0) + 1
-          }
+        for (const row of statRows) {
+          totalAll += row.total
+          completedAll += row.completed
+          totalsByAuto[row.automation_id] = { total: row.total, completed: row.completed }
+          dayCountsByAuto[row.automation_id] = row.daily_l10d ?? []
         }
 
         setThreadTotalsAll({ total: totalAll, completed: completedAll })
@@ -967,7 +951,8 @@ export function DashboardPage() {
     const repliesByDayL10D   = daily.map((d) => d.run_count)
     const avgRespSByDayL10D  = daily.map((d) => d.avg_resp_s)
     const savedMinsByDayL10D = daily.map((d) => d.saved_mins)
-    const customersByDayL10D = last10DayKeys.map((k) => (threadDayCountsByAuto?.[a.id]?.[k] ?? 0))
+    const threadDays = threadDayCountsByAuto?.[a.id]
+    const customersByDayL10D = last10DayKeys.map((_, i) => threadDays?.[i] ?? 0)
 
     const maxRepliesL10D   = Math.max(...repliesByDayL10D, 1)
     const maxDayAvgL10D    = Math.max(...avgRespSByDayL10D, 1)
@@ -2024,32 +2009,42 @@ export function DashboardPage() {
             <div className="team-member-role">{lang === 'ES' ? member.role_es : member.role_en}</div>
           </div>
 
-          <div className="team-stat">
-            <span className="ts-val">{totalReplies > 0 ? totalReplies : <span className="dim">-</span>}</span>
-            <small>{t.msgs}</small>
-          </div>
-          <div className="team-stat">
-            <span className={`ts-val ${totalReplies > 0 && perfPct > 0 ? 'green' : 'dim'}`}>
-              {totalReplies > 0 ? `${perfPct.toFixed(0)}%` : '-'}
-            </span>
-            <small>{t.perf}</small>
-          </div>
-          <div className="team-stat">
-            <span className="ts-val">{avgRespS > 0 ? `${avgRespS.toFixed(0)}s` : <span className="dim">-</span>}</span>
-            <small>{t.avg}</small>
-          </div>
-          <div className="team-stat">
-            <span className={`ts-val ${totalReplies > 0 ? 'green' : 'dim'}`}>
-              {totalReplies > 0 ? fmtTime(timeSavedMins) : '-'}
-            </span>
-            <small>{t.saved}</small>
-          </div>
-          <div className="team-stat">
-            <span className={`ts-val ${memberSavings != null && memberSavings > 0 ? 'green' : 'dim'}`}>
-              {memberSavings != null ? fmtC(memberSavings) : '-'}
-            </span>
-            <small>{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</small>
-          </div>
+          <Tooltip asChild label={t.workerRepliesHow}>
+            <div className="team-stat">
+              <span className="ts-val">{totalReplies > 0 ? totalReplies : <span className="dim">-</span>}</span>
+              <small>{t.msgs}</small>
+            </div>
+          </Tooltip>
+          <Tooltip asChild label={t.workerPerfHow}>
+            <div className="team-stat">
+              <span className={`ts-val ${totalReplies > 0 && perfPct > 0 ? 'green' : 'dim'}`}>
+                {totalReplies > 0 ? `${perfPct.toFixed(0)}%` : '-'}
+              </span>
+              <small>{t.perf}</small>
+            </div>
+          </Tooltip>
+          <Tooltip asChild label={t.avgRespHow}>
+            <div className="team-stat">
+              <span className="ts-val">{avgRespS > 0 ? `${avgRespS.toFixed(0)}s` : <span className="dim">-</span>}</span>
+              <small>{t.avg}</small>
+            </div>
+          </Tooltip>
+          <Tooltip asChild label={t.timeSavedHow}>
+            <div className="team-stat">
+              <span className={`ts-val ${totalReplies > 0 ? 'green' : 'dim'}`}>
+                {totalReplies > 0 ? fmtTime(timeSavedMins) : '-'}
+              </span>
+              <small>{t.saved}</small>
+            </div>
+          </Tooltip>
+          <Tooltip asChild label={t.totalSavingsHow.replace(/<[^>]*>/g, '')}>
+            <div className="team-stat">
+              <span className={`ts-val ${memberSavings != null && memberSavings > 0 ? 'green' : 'dim'}`}>
+                {memberSavings != null ? fmtC(memberSavings) : '-'}
+              </span>
+              <small>{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</small>
+            </div>
+          </Tooltip>
 
           {chevronSvg()}
         </div>
@@ -2178,16 +2173,17 @@ export function DashboardPage() {
               </select>}
 
               {isInternal && <div className="brand-picker" ref={brandPickerWrapRef}>
-                <button
-                  type="button"
-                  className="hdr-ctl hdr-btn brand-btn"
-                  aria-haspopup="dialog"
-                  aria-expanded={brandPickerOpen}
-                  onClick={() => setBrandPickerOpen((v) => !v)}
-                  title={lang === 'ES' ? 'Color de marca' : 'Brand color'}
-                >
-                  <span className="brand-swatch" style={{ background: brandHex }} aria-hidden="true" />
-                </button>
+                <Tooltip asChild label={lang === 'ES' ? 'Color de marca' : 'Brand color'}>
+                  <button
+                    type="button"
+                    className="hdr-ctl hdr-btn brand-btn"
+                    aria-haspopup="dialog"
+                    aria-expanded={brandPickerOpen}
+                    onClick={() => setBrandPickerOpen((v) => !v)}
+                  >
+                    <span className="brand-swatch" style={{ background: brandHex }} aria-hidden="true" />
+                  </button>
+                </Tooltip>
 
                 {brandPickerOpen ? (
                   <div className="brand-pop" role="dialog" aria-label={lang === 'ES' ? 'Selector de color' : 'Color picker'}>
@@ -2334,38 +2330,48 @@ export function DashboardPage() {
           )}
 
           {activeTab === 'team' && <div className="kpis">
-            <div className="kpi" title={t.avgRespHow}>
-              <div className="kpi-val green" id="kAvgResp">
-                {kpis.avgRespS > 0 ? `${kpis.avgRespS.toFixed(0)}s` : '-'}
+            <Tooltip asChild label={t.avgRespHow}>
+              <div className="kpi">
+                <div className="kpi-val green" id="kAvgResp">
+                  {kpis.avgRespS > 0 ? `${kpis.avgRespS.toFixed(0)}s` : '-'}
+                </div>
+                <div className="kpi-lbl">{t.avgResponseTime}</div>
               </div>
-              <div className="kpi-lbl">{t.avgResponseTime}</div>
-            </div>
-            <div className="kpi" title={t.timeSavedHow}>
-              <div className="kpi-val green" id="kTimeSaved">
-                {fmtTime(kpis.timeSavedMins)}
+            </Tooltip>
+            <Tooltip asChild label={t.timeSavedHow}>
+              <div className="kpi">
+                <div className="kpi-val green" id="kTimeSaved">
+                  {fmtTime(kpis.timeSavedMins)}
+                </div>
+                <div className="kpi-lbl">{t.timeSaved}</div>
               </div>
-              <div className="kpi-lbl">{t.timeSaved}</div>
-            </div>
-            <div className="kpi" title={t.totalSavingsHow.replace(/<[^>]*>/g, '')}>
-              <div className={`kpi-val ${clientTotalSavings != null && clientTotalSavings > 0 ? 'green' : ''}`} id="kSavings">
-                {clientTotalSavings != null ? fmtC(clientTotalSavings) : '-'}
+            </Tooltip>
+            <Tooltip asChild label={t.totalSavingsHow.replace(/<[^>]*>/g, '')}>
+              <div className="kpi">
+                <div className={`kpi-val ${clientTotalSavings != null && clientTotalSavings > 0 ? 'green' : ''}`} id="kSavings">
+                  {clientTotalSavings != null ? fmtC(clientTotalSavings) : '-'}
+                </div>
+                <div className="kpi-lbl">{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</div>
               </div>
-              <div className="kpi-lbl">{lang === 'ES' ? 'Costes ahorrados' : 'Costs saved'}</div>
-            </div>
-            <div className="kpi highlight" title={t.totalConversationsHow}>
-              <div className="kpi-val" id="kTotalConvos">
-                {clientKpis != null ? clientKpis.total_customers : '-'}
+            </Tooltip>
+            <Tooltip asChild label={t.totalConversationsHow}>
+              <div className="kpi highlight">
+                <div className="kpi-val" id="kTotalConvos">
+                  {clientKpis != null ? clientKpis.total_customers : '-'}
+                </div>
+                <div className="kpi-lbl">{t.totalConversations}</div>
               </div>
-              <div className="kpi-lbl">{t.totalConversations}</div>
-            </div>
-            <div className="kpi highlight" title={t.finishedHow}>
-              <div className="kpi-val" id="kFinishedPct">
-                {totalThreads != null && totalThreads > 0
-                  ? `${finishedPct.toFixed(0)}% (${completedThreads ?? 0}/${totalThreads})`
-                  : '-'}
+            </Tooltip>
+            <Tooltip asChild label={t.finishedHow}>
+              <div className="kpi highlight">
+                <div className="kpi-val" id="kFinishedPct">
+                  {totalThreads != null && totalThreads > 0
+                    ? `${finishedPct.toFixed(0)}% (${completedThreads ?? 0}/${totalThreads})`
+                    : '-'}
+                </div>
+                <div className="kpi-lbl">{t.completed}</div>
               </div>
-              <div className="kpi-lbl">{t.completed}</div>
-            </div>
+            </Tooltip>
           </div>}
 
           {activeTab === 'team' && brandSaveError ? (

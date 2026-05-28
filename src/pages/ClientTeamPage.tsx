@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
+import { Tooltip } from '../components/Tooltip'
 import '../styles/dashboard.css'
 
 type ClientRow = { id: number; client_name: string | null }
@@ -221,15 +222,16 @@ export function ClientTeamPage() {
                             {isSelf ? ' · you' : ''}
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => void revokeMember(m.user_id, c.id)}
-                          disabled={busy === `rm:${m.user_id}:${c.id}`}
-                          style={{ ...subtleBtnStyle, color: 'var(--red, #c33)' }}
-                          title={isSelf ? 'Remove your own access to this client' : 'Revoke access'}
-                        >
-                          Revoke
-                        </button>
+                        <Tooltip label={isSelf ? 'Remove your own access to this client' : 'Revoke access'}>
+                          <button
+                            type="button"
+                            onClick={() => void revokeMember(m.user_id, c.id)}
+                            disabled={busy === `rm:${m.user_id}:${c.id}`}
+                            style={{ ...subtleBtnStyle, color: 'var(--red, #c33)' }}
+                          >
+                            Revoke
+                          </button>
+                        </Tooltip>
                       </div>
                     )
                   })}
