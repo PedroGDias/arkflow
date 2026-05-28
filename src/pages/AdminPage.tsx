@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
+import { Tooltip } from '../components/Tooltip'
 import '../styles/dashboard.css'
 
 type Profile = {
@@ -30,7 +31,6 @@ export function AdminPage() {
   const [pending, setPending] = useState<PendingInvite[]>([])
   const [adminEmails, setAdminEmails] = useState<AdminEmail[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
 
   const [inviteEmail, setInviteEmail] = useState('')
@@ -42,10 +42,13 @@ export function AdminPage() {
   const [adminErr, setAdminErr] = useState<string | null>(null)
   const [adminMsg, setAdminMsg] = useState<string | null>(null)
 
+  const [usersMsg, setUsersMsg] = useState<string | null>(null)
+  const [usersErr, setUsersErr] = useState<string | null>(null)
+  const [confirmDel, setConfirmDel] = useState<string | null>(null)
+
   const load = useCallback(async () => {
     if (!supabase) return
     const sb = supabase
-    setLoading(true)
     try {
       // Single SECURITY DEFINER RPC that checks is_internal() server-side and
       // returns all admin data. Avoids depending on five separate
@@ -75,8 +78,6 @@ export function AdminPage() {
       }
       console.error('[admin] load failed', e)
       setLoadError(msg)
-    } finally {
-      setLoading(false)
     }
   }, [])
 
@@ -159,7 +160,7 @@ export function AdminPage() {
 
         // Clear the now-consumed pending invites for this email.
         await supabase.from('pending_invites').delete().eq('email', email)
-        setInviteMsg(`Access granted to ${email}.`)
+        setInviteMsg(`Access granted to ${email} — no email sent (existing account). Use “Resend link” below to send them a sign-in link.`)
       } else {
         // Brand-new user: send them a magic link. The auth trigger will
         // consume the pending invites on first sign-in.
@@ -171,13 +172,57 @@ export function AdminPage() {
           },
         })
         if (linkRes.error) throw linkRes.error
-        setInviteMsg(`Invite sent to ${email}. They’ll get a sign-in link by email.`)
+        setInviteMsg(`Sign-in link sent to ${email}. If it doesn’t arrive, check spam — delivery depends on the project’s SMTP settings.`)
       }
       setInviteEmail('')
       setInviteClientIds(new Set())
       await load()
     } catch (e) {
       setInviteErr(e instanceof Error ? e.message : 'Failed to invite')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Email an existing user a fresh magic sign-in link. Surfaces the real result
+  // (incl. Supabase rate-limit / SMTP errors) so the admin knows whether it sent.
+  async function resendLink(email: string, userId: string) {
+    if (!supabase) return
+    setUsersMsg(null)
+    setUsersErr(null)
+    setBusy(`resend:${userId}`)
+    try {
+      const res = await supabase.auth.signInWithOtp({
+        email: email.toLowerCase(),
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          shouldCreateUser: false,
+        },
+      })
+      if (res.error) throw res.error
+      setUsersMsg(`Sign-in link sent to ${email}.`)
+    } catch (e) {
+      setUsersErr(e instanceof Error ? e.message : `Failed to send link to ${email}`)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // Hard-delete via the admin_delete_user RPC (removes the auth user, cascading
+  // to the profile + client mappings, and clears their invite/admin entries).
+  async function deleteUser(p: Profile) {
+    if (!supabase) return
+    setUsersMsg(null)
+    setUsersErr(null)
+    setBusy(`del:${p.id}`)
+    try {
+      const res = await supabase.rpc('admin_delete_user', { target: p.id })
+      if (res.error) throw res.error
+      setConfirmDel(null)
+      setUsersMsg(`Deleted ${p.email}.`)
+      await load()
+    } catch (e) {
+      setUsersErr(e instanceof Error ? e.message : `Failed to delete ${p.email}`)
     } finally {
       setBusy(null)
     }
@@ -370,211 +415,204 @@ export function AdminPage() {
 
           {loadError ? <div className="error-msg" style={{ marginTop: 12 }}>{loadError}</div> : null}
 
-          {/* ── Admins ───────────────────────────────────────────────────── */}
-          <div style={card}>
-            <div style={cardHead}>Admins</div>
+          {/* top row: compact forms side by side */}
+          <div style={topGrid}>
+            {/* ── Admins ─────────────────────────────────────────────────── */}
+            <div style={card}>
+              <div style={cardHead}>Admins</div>
 
-            {(() => {
-              const adminEmailSet = new Set(adminEmails.map((a) => a.email.toLowerCase()))
-              const internalProfiles = profiles.filter((p) => p.role === 'internal' && !p.disabled_at)
-              const internalEmails = new Set(internalProfiles.map((p) => p.email.toLowerCase()))
-              const pendingAdmins = adminEmails.filter((a) => !internalEmails.has(a.email.toLowerCase()))
-              return (
-                <>
-                  <div style={{ display: 'grid', gap: 10 }}>
-                    {internalProfiles.map((p) => {
-                      const inAllowlist = adminEmailSet.has(p.email.toLowerCase())
-                      const isSelf = p.email.toLowerCase() === meProfile?.email.toLowerCase()
-                      return (
-                        <div key={p.id} style={{ ...rowStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                          <div>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: 13 }}>{p.email}</div>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text4)' }}>
-                              {isSelf ? 'You · ' : ''}{inAllowlist ? 'allowlisted' : 'internal (domain rule)'}
+              {(() => {
+                const adminEmailSet = new Set(adminEmails.map((a) => a.email.toLowerCase()))
+                const internalProfiles = profiles.filter((p) => p.role === 'internal' && !p.disabled_at)
+                const internalEmails = new Set(internalProfiles.map((p) => p.email.toLowerCase()))
+                const pendingAdmins = adminEmails.filter((a) => !internalEmails.has(a.email.toLowerCase()))
+                return (
+                  <>
+                    <div style={listBox}>
+                      {internalProfiles.map((p) => {
+                        const inAllowlist = adminEmailSet.has(p.email.toLowerCase())
+                        const isSelf = p.email.toLowerCase() === meProfile?.email.toLowerCase()
+                        return (
+                          <div key={p.id} style={listRow}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={emailText}>{p.email}</div>
+                              <div style={metaText}>
+                                {isSelf ? 'You · ' : ''}{inAllowlist ? 'allowlisted' : 'internal (domain rule)'}
+                              </div>
                             </div>
+                            <Tooltip label={isSelf ? "You can't remove yourself" : 'Remove admin'}>
+                              <button
+                                onClick={() => void removeAdmin(p.email)}
+                                disabled={isSelf || busy === `rm-admin:${p.email.toLowerCase()}`}
+                                style={dangerLink}
+                              >
+                                Remove
+                              </button>
+                            </Tooltip>
+                          </div>
+                        )
+                      })}
+
+                      {pendingAdmins.map((a) => (
+                        <div key={a.email} style={listRow}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={emailText}>{a.email}</div>
+                            <div style={metaText}>allowlisted · awaiting first sign-in</div>
                           </div>
                           <button
-                            onClick={() => void removeAdmin(p.email)}
-                            disabled={isSelf || busy === `rm-admin:${p.email.toLowerCase()}`}
-                            style={{ ...subtleBtnStyle, color: 'var(--red, #c33)' }}
-                            title={isSelf ? "You can't remove yourself" : 'Remove admin'}
+                            onClick={() => void removeAdmin(a.email)}
+                            disabled={busy === `rm-admin:${a.email.toLowerCase()}`}
+                            style={dangerLink}
                           >
                             Remove
                           </button>
                         </div>
-                      )
-                    })}
+                      ))}
+                    </div>
 
-                    {pendingAdmins.map((a) => (
-                      <div key={a.email} style={{ ...rowStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                        <div>
-                          <div style={{ fontFamily: 'var(--mono)', fontSize: 13 }}>{a.email}</div>
-                          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text4)' }}>
-                            allowlisted · waiting for first sign-in
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => void removeAdmin(a.email)}
-                          disabled={busy === `rm-admin:${a.email.toLowerCase()}`}
-                          style={{ ...subtleBtnStyle, color: 'var(--red, #c33)' }}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                      <input
+                        type="email"
+                        placeholder="teammate@arkflow.ai"
+                        value={newAdminEmail}
+                        onChange={(e) => setNewAdminEmail(e.currentTarget.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') void addAdmin() }}
+                        style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void addAdmin()}
+                        disabled={busy === 'add-admin' || !newAdminEmail.trim()}
+                        style={primaryBtnStyle}
+                      >
+                        {busy === 'add-admin' ? 'Adding…' : 'Add'}
+                      </button>
+                    </div>
+                    {adminMsg ? <div style={okMsg}>{adminMsg}</div> : null}
+                    {adminErr ? <div className="error-msg" style={{ marginTop: 8 }}>{adminErr}</div> : null}
+                  </>
+                )
+              })()}
+            </div>
 
-                  <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-                    <input
-                      type="email"
-                      placeholder="teammate@arkflow.ai"
-                      value={newAdminEmail}
-                      onChange={(e) => setNewAdminEmail(e.currentTarget.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') void addAdmin() }}
-                      style={{ ...inputStyle, flex: 1, minWidth: 220 }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => void addAdmin()}
-                      disabled={busy === 'add-admin' || !newAdminEmail.trim()}
-                      style={primaryBtnStyle}
-                    >
-                      {busy === 'add-admin' ? 'Adding…' : 'Add admin'}
-                    </button>
-                  </div>
-                  {adminMsg ? <div style={{ marginTop: 8, color: 'var(--green)', fontSize: 12, fontFamily: 'var(--mono)' }}>{adminMsg}</div> : null}
-                  {adminErr ? <div className="error-msg" style={{ marginTop: 8 }}>{adminErr}</div> : null}
-                </>
-              )
-            })()}
-          </div>
-
-          {/* ── Invite form ──────────────────────────────────────────────── */}
-          <div style={card}>
-            <div style={cardHead}>Invite a client</div>
-            <div style={{ display: 'grid', gap: 12 }}>
-              <input
-                type="email"
-                placeholder="client-contact@company.com"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.currentTarget.value)}
-                style={inputStyle}
-              />
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {clients.map((c) => {
-                  const active = inviteClientIds.has(c.id)
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => {
-                        setInviteClientIds((prev) => {
-                          const next = new Set(prev)
-                          if (next.has(c.id)) next.delete(c.id)
-                          else next.add(c.id)
-                          return next
-                        })
-                      }}
-                      style={{
-                        ...pillStyle,
-                        background: active ? 'var(--text1)' : 'var(--white)',
-                        color: active ? 'var(--white)' : 'var(--text2)',
-                      }}
-                    >
-                      {c.client_name?.trim() || `Client ${c.id}`}
-                    </button>
-                  )
-                })}
+            {/* ── Invite form ───────────────────────────────────────────── */}
+            <div style={card}>
+              <div style={cardHead}>Invite a client</div>
+              <div style={{ display: 'grid', gap: 10 }}>
+                <input
+                  type="email"
+                  placeholder="client-contact@company.com"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.currentTarget.value)}
+                  style={inputStyle}
+                />
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {clients.map((c) => {
+                    const active = inviteClientIds.has(c.id)
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setInviteClientIds((prev) => {
+                            const next = new Set(prev)
+                            if (next.has(c.id)) next.delete(c.id)
+                            else next.add(c.id)
+                            return next
+                          })
+                        }}
+                        style={{
+                          ...pillStyle,
+                          background: active ? 'var(--text1)' : 'var(--white)',
+                          color: active ? 'var(--white)' : 'var(--text2)',
+                        }}
+                      >
+                        {c.client_name?.trim() || `Client ${c.id}`}
+                      </button>
+                    )
+                  })}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <button
+                    type="button"
+                    onClick={() => void inviteClient()}
+                    disabled={busy === 'invite' || !inviteEmail.trim() || inviteClientIds.size === 0}
+                    style={primaryBtnStyle}
+                  >
+                    {busy === 'invite' ? 'Sending…' : 'Send invite'}
+                  </button>
+                  {inviteMsg ? <div style={{ ...okMsg, marginTop: 0 }}>{inviteMsg}</div> : null}
+                </div>
+                {inviteErr ? <div className="error-msg">{inviteErr}</div> : null}
               </div>
-              <div>
-                <button
-                  type="button"
-                  onClick={() => void inviteClient()}
-                  disabled={busy === 'invite' || !inviteEmail.trim() || inviteClientIds.size === 0}
-                  style={primaryBtnStyle}
-                >
-                  {busy === 'invite' ? 'Sending…' : 'Send invite'}
-                </button>
-              </div>
-              {inviteMsg ? <div style={{ color: 'var(--green)', fontSize: 12, fontFamily: 'var(--mono)' }}>{inviteMsg}</div> : null}
-              {inviteErr ? <div className="error-msg">{inviteErr}</div> : null}
             </div>
           </div>
 
-          {/* ── Users ──────────────────────────────────────────────────────── */}
+          {/* ── Users (compact table) ──────────────────────────────────────── */}
           <div style={card}>
             <div style={cardHead}>Users ({profiles.length})</div>
-            {loading ? <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text4)' }}>Loading…</div> : null}
-            <div style={{ display: 'grid', gap: 14 }}>
-              {profiles.map((p) => {
-                const assigned = new Set(clientsByUser.get(p.id) ?? [])
-                const isInternal = p.role === 'internal'
-                return (
-                  <div key={p.id} style={rowStyle}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-                      <div>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: 13 }}>{p.email}</div>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text4)' }}>
-                          {p.full_name ? `${p.full_name} · ` : ''}{p.role}{p.disabled_at ? ' · disabled' : ''}
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => void toggleDisabled(p)}
-                        disabled={busy === `disable:${p.id}` || p.id === meProfile?.id}
-                        style={{
-                          ...subtleBtnStyle,
-                          color: p.disabled_at ? 'var(--green)' : 'var(--red, #c33)',
-                        }}
-                      >
-                        {p.disabled_at ? 'Re-enable' : 'Disable'}
-                      </button>
+            {usersMsg ? <div style={{ ...okMsg, marginTop: 0, marginBottom: 8 }}>{usersMsg}</div> : null}
+            {usersErr ? <div className="error-msg" style={{ marginBottom: 8 }}>{usersErr}</div> : null}
+
+            <div style={{ ...userRow, borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
+              <span style={colLabel}>User</span>
+              <span style={colLabel}>Access</span>
+              <span style={colLabel}>Can manage</span>
+              <span />
+            </div>
+
+            {profiles.map((p) => {
+              const assigned = new Set(clientsByUser.get(p.id) ?? [])
+              const isInternal = p.role === 'internal'
+              return (
+                <div key={p.id} style={{ ...userRow, ...(p.disabled_at ? rowDisabled : null) }}>
+                  <div style={{ minWidth: 0, ...(p.disabled_at ? dimmed : null) }}>
+                    <div style={emailText}>{p.email}</div>
+                    <div style={metaText}>
+                      {p.full_name ? `${p.full_name} · ` : ''}{p.role}{p.disabled_at ? ' · disabled' : ''}
                     </div>
+                  </div>
 
-                    {isInternal ? (
-                      <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text4)', marginTop: 8 }}>
-                        Internal user — sees all clients.
+                  {isInternal ? (
+                    <span style={{ ...metaText, gridColumn: '2 / 4', ...(p.disabled_at ? dimmed : null) }}>Internal — sees all clients</span>
+                  ) : (
+                    <>
+                      <div style={{ ...pillWrap, ...(p.disabled_at ? dimmed : null) }}>
+                        {clients.map((c) => {
+                          const active = assigned.has(c.id)
+                          const k = `${p.id}:${c.id}`
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => void setUserClient(p.id, c.id, !active)}
+                              disabled={busy === k}
+                              style={{
+                                ...pillStyle,
+                                background: active ? 'var(--text1)' : 'var(--white)',
+                                color: active ? 'var(--white)' : 'var(--text2)',
+                              }}
+                            >
+                              {c.client_name?.trim() || `Client ${c.id}`}
+                            </button>
+                          )
+                        })}
                       </div>
-                    ) : (
-                      <div style={{ marginTop: 8 }}>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text4)', marginBottom: 6 }}>Access</div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                          {clients.map((c) => {
-                            const active = assigned.has(c.id)
-                            const k = `${p.id}:${c.id}`
-                            return (
-                              <button
-                                key={c.id}
-                                type="button"
-                                onClick={() => void setUserClient(p.id, c.id, !active)}
-                                disabled={busy === k}
-                                style={{
-                                  ...pillStyle,
-                                  background: active ? 'var(--text1)' : 'var(--white)',
-                                  color: active ? 'var(--white)' : 'var(--text2)',
-                                }}
-                              >
-                                {c.client_name?.trim() || `Client ${c.id}`}
-                              </button>
-                            )
-                          })}
-                        </div>
 
-                        {assigned.size > 0 ? (
-                          <>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--text4)', margin: '12px 0 6px' }}>
-                              Can manage members
-                            </div>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                              {clients.filter((c) => assigned.has(c.id)).map((c) => {
-                                const isMgr = managerKeys.has(`${p.id}:${c.id}`)
-                                const k = `mgr:${p.id}:${c.id}`
-                                return (
+                      <div style={{ ...pillWrap, ...(p.disabled_at ? dimmed : null) }}>
+                        {assigned.size > 0
+                          ? clients.filter((c) => assigned.has(c.id)).map((c) => {
+                              const isMgr = managerKeys.has(`${p.id}:${c.id}`)
+                              const k = `mgr:${p.id}:${c.id}`
+                              return (
+                                <Tooltip
+                                  key={c.id}
+                                  label={isMgr ? 'Manager — can invite/revoke others for this client' : 'Make a members-manager for this client'}
+                                >
                                   <button
-                                    key={c.id}
                                     type="button"
                                     onClick={() => void setUserClientManage(p.id, c.id, !isMgr)}
                                     disabled={busy === k}
-                                    title={isMgr ? 'Manager — can invite/revoke others for this client' : 'Make a members-manager for this client'}
                                     style={{
                                       ...pillStyle,
                                       background: isMgr ? 'var(--text1)' : 'var(--white)',
@@ -583,38 +621,83 @@ export function AdminPage() {
                                   >
                                     {isMgr ? '★ ' : ''}{c.client_name?.trim() || `Client ${c.id}`}
                                   </button>
-                                )
-                              })}
-                            </div>
-                          </>
-                        ) : null}
+                                </Tooltip>
+                              )
+                            })
+                          : <span style={metaText}>—</span>}
                       </div>
-                    )}
+                    </>
+                  )}
+
+                  <div style={actionCell}>
+                    {!p.disabled_at ? (
+                      <Tooltip label="Email this user a fresh magic sign-in link">
+                        <button
+                          onClick={() => void resendLink(p.email, p.id)}
+                          disabled={busy === `resend:${p.id}`}
+                          style={subtleLink}
+                        >
+                          {busy === `resend:${p.id}` ? 'Sending…' : 'Resend link'}
+                        </button>
+                      </Tooltip>
+                    ) : null}
+                    <button
+                      onClick={() => void toggleDisabled(p)}
+                      disabled={busy === `disable:${p.id}` || p.id === meProfile?.id}
+                      style={{ ...dangerLink, color: p.disabled_at ? 'var(--green)' : 'var(--red, #c33)' }}
+                    >
+                      {p.disabled_at ? 'Re-enable' : 'Disable'}
+                    </button>
+                    {p.id !== meProfile?.id ? (
+                      confirmDel === p.id ? (
+                        <span style={confirmRow}>
+                          <Tooltip label="Permanently delete this user">
+                            <button
+                              onClick={() => void deleteUser(p)}
+                              disabled={busy === `del:${p.id}`}
+                              style={dangerLink}
+                            >
+                              {busy === `del:${p.id}` ? 'Deleting…' : 'Confirm'}
+                            </button>
+                          </Tooltip>
+                          <button onClick={() => setConfirmDel(null)} style={subtleLink}>Cancel</button>
+                        </span>
+                      ) : (
+                        <Tooltip label="Permanently delete this user">
+                          <button
+                            onClick={() => { setUsersMsg(null); setUsersErr(null); setConfirmDel(p.id) }}
+                            style={dangerLink}
+                          >
+                            Delete
+                          </button>
+                        </Tooltip>
+                      )
+                    ) : null}
                   </div>
-                )
-              })}
-            </div>
+                </div>
+              )
+            })}
           </div>
 
           {/* ── Pending invites ────────────────────────────────────────────── */}
           {pending.length > 0 ? (
             <div style={card}>
               <div style={cardHead}>Pending invites ({Array.from(pendingByEmail.keys()).length})</div>
-              <div style={{ display: 'grid', gap: 10 }}>
+              <div style={listBox}>
                 {Array.from(pendingByEmail.entries()).map(([email, cids]) => (
-                  <div key={email} style={rowStyle}>
-                    <div style={{ fontFamily: 'var(--mono)', fontSize: 13 }}>{email}</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                  <div key={email} style={{ ...listRow, alignItems: 'center' }}>
+                    <div style={{ ...emailText, flex: '0 0 auto' }}>{email}</div>
+                    <div style={{ ...pillWrap, justifyContent: 'flex-end', flex: 1 }}>
                       {cids.map((cid) => (
-                        <button
-                          key={cid}
-                          onClick={() => void revokePending(email, cid)}
-                          style={pillStyle}
-                          title="Click to revoke"
-                          disabled={busy === `pending:${email}:${cid}`}
-                        >
-                          {clientById.get(cid) ?? `Client ${cid}`} ✕
-                        </button>
+                        <Tooltip key={cid} label="Click to revoke">
+                          <button
+                            onClick={() => void revokePending(email, cid)}
+                            style={pillStyle}
+                            disabled={busy === `pending:${email}:${cid}`}
+                          >
+                            {clientById.get(cid) ?? `Client ${cid}`} ✕
+                          </button>
+                        </Tooltip>
                       ))}
                     </div>
                   </div>
@@ -628,67 +711,168 @@ export function AdminPage() {
   )
 }
 
+const topGrid: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+  gap: 12,
+  alignItems: 'start',
+  marginTop: 14,
+}
+
 const card: React.CSSProperties = {
   border: '1px solid var(--border)',
   borderRadius: 12,
-  padding: 16,
+  padding: 14,
   background: 'var(--white)',
-  marginTop: 18,
+  marginTop: 12,
 }
 
 const cardHead: React.CSSProperties = {
   fontFamily: 'var(--mono)',
-  fontSize: 11,
-  letterSpacing: 0.5,
+  fontSize: 10,
+  letterSpacing: 0.8,
   textTransform: 'uppercase',
   color: 'var(--text3)',
-  marginBottom: 12,
+  marginBottom: 10,
 }
 
-const rowStyle: React.CSSProperties = {
-  border: '1px solid var(--border)',
-  borderRadius: 10,
-  padding: 12,
+// Divided list (admins, pending) — rows separated by hairlines, no nested boxes.
+const listBox: React.CSSProperties = { display: 'grid' }
+
+const listRow: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  gap: 12,
+  padding: '7px 0',
+  borderBottom: '1px solid var(--border)',
 }
+
+const emailText: React.CSSProperties = {
+  fontFamily: 'var(--mono)',
+  fontSize: 12.5,
+  color: 'var(--text1)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const metaText: React.CSSProperties = {
+  fontFamily: 'var(--mono)',
+  fontSize: 10.5,
+  color: 'var(--text4)',
+  marginTop: 1,
+}
+
+const okMsg: React.CSSProperties = {
+  marginTop: 8,
+  color: 'var(--green)',
+  fontSize: 11.5,
+  fontFamily: 'var(--mono)',
+}
+
+// Users table: User | Access | Can manage | action.
+// The action column is a fixed width (not `auto`) so the header row and data
+// rows distribute the remaining fr-space identically and stay column-aligned.
+const userRow: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(160px, 1.1fr) minmax(0, 1.7fr) minmax(0, 1.1fr) 116px',
+  gap: 12,
+  alignItems: 'center',
+  padding: '9px 0',
+  borderBottom: '1px solid var(--border)',
+}
+
+// Disabled users get a solid neutral grey band spanning the full row (negative
+// inline margin bleeds it to the card's inner edges).
+const rowDisabled: React.CSSProperties = {
+  background: '#ececec',
+  marginInline: -14,
+  paddingInline: 14,
+}
+
+// Fades a disabled row's text/pills (applied to content cells only, so the grey
+// band stays solid and the action button keeps its colour).
+const dimmed: React.CSSProperties = {
+  opacity: 0.45,
+}
+
+const colLabel: React.CSSProperties = {
+  fontFamily: 'var(--mono)',
+  fontSize: 9,
+  textTransform: 'uppercase',
+  letterSpacing: 0.6,
+  color: 'var(--text4)',
+}
+
+const pillWrap: React.CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 5 }
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
-  borderRadius: 10,
+  borderRadius: 9,
   border: '1px solid var(--border)',
-  padding: '10px 12px',
+  padding: '8px 11px',
   background: 'var(--white)',
   fontFamily: 'var(--mono)',
-  fontSize: 13,
+  fontSize: 12.5,
 }
 
 const pillStyle: React.CSSProperties = {
   border: '1px solid var(--border)',
   borderRadius: 999,
-  padding: '6px 12px',
+  padding: '3px 10px',
   fontFamily: 'var(--mono)',
-  fontSize: 12,
+  fontSize: 11,
   cursor: 'pointer',
   background: 'var(--white)',
   color: 'var(--text2)',
+  whiteSpace: 'nowrap',
 }
 
 const primaryBtnStyle: React.CSSProperties = {
   border: '1px solid var(--text1)',
   background: 'var(--text1)',
   color: 'var(--white)',
-  borderRadius: 10,
-  padding: '10px 16px',
+  borderRadius: 9,
+  padding: '8px 14px',
   fontFamily: 'var(--mono)',
-  fontSize: 13,
+  fontSize: 12.5,
   cursor: 'pointer',
+  whiteSpace: 'nowrap',
 }
 
-const subtleBtnStyle: React.CSSProperties = {
-  border: '1px solid var(--border)',
-  background: 'var(--white)',
-  borderRadius: 8,
-  padding: '6px 12px',
+const dangerLink: React.CSSProperties = {
+  border: 'none',
+  background: 'none',
+  padding: '2px 4px',
   fontFamily: 'var(--mono)',
-  fontSize: 12,
+  fontSize: 11,
+  color: 'var(--red, #c33)',
   cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  justifySelf: 'end', // right-aligns within the users-grid action column (ignored in flex rows)
+  textAlign: 'right',
+}
+
+// Right-aligned stack of row actions (Resend link + Disable/Re-enable + Delete).
+const actionCell: React.CSSProperties = {
+  justifySelf: 'end',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-end',
+  gap: 3,
+}
+
+const confirmRow: React.CSSProperties = { display: 'flex', gap: 8 }
+
+const subtleLink: React.CSSProperties = {
+  border: 'none',
+  background: 'none',
+  padding: '2px 4px',
+  fontFamily: 'var(--mono)',
+  fontSize: 11,
+  color: 'var(--text3)',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  textAlign: 'right',
 }
