@@ -187,7 +187,10 @@ export function ClientTeamPage() {
                     type="email"
                     placeholder="teammate@company.com"
                     value={inviteEmail[c.id] ?? ''}
-                    onChange={(e) => setInviteEmail((s) => ({ ...s, [c.id]: e.currentTarget.value }))}
+                    onChange={(e) => {
+                      const v = e.currentTarget.value
+                      setInviteEmail((s) => ({ ...s, [c.id]: v }))
+                    }}
                     onKeyDown={(e) => { if (e.key === 'Enter') void grant(c.id) }}
                     style={{ ...inputStyle, maxWidth: 320 }}
                   />
