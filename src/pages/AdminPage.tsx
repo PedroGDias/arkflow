@@ -132,14 +132,15 @@ export function AdminPage() {
         client_id: cid,
         invited_by: meProfile?.id ?? null,
       }))
+      // Record the invite so a brand-new user is auto-mapped on first sign-in
+      // (the auth trigger consumes these rows).
       const insRes = await supabase
         .from('pending_invites')
         .upsert(rows, { onConflict: 'email,client_id' })
       if (insRes.error) throw insRes.error
 
-      // Find an existing profile for this email — if they already have an
-      // account, also assign the client mappings directly (no magic link needed
-      // unless they're not logged in elsewhere).
+      // If they already have an account, apply the client mappings + re-enable
+      // right away (the magic link below still gets sent so they can sign in).
       const existing = profiles.find((p) => p.email.toLowerCase() === email)
       if (existing) {
         const exRes = await supabase
@@ -158,22 +159,25 @@ export function AdminPage() {
           if (enRes.error) throw enRes.error
         }
 
-        // Clear the now-consumed pending invites for this email.
+        // Mappings applied directly — no need for the trigger to replay them.
         await supabase.from('pending_invites').delete().eq('email', email)
-        setInviteMsg(`Access granted to ${email} — no email sent (existing account). Use “Resend link” below to send them a sign-in link.`)
-      } else {
-        // Brand-new user: send them a magic link. The auth trigger will
-        // consume the pending invites on first sign-in.
-        const linkRes = await supabase.auth.signInWithOtp({
-          email,
-          options: {
-            emailRedirectTo: `${window.location.origin}/auth/callback`,
-            shouldCreateUser: true,
-          },
-        })
-        if (linkRes.error) throw linkRes.error
-        setInviteMsg(`Sign-in link sent to ${email}. If it doesn’t arrive, check spam — delivery depends on the project’s SMTP settings.`)
       }
+
+      // Always send a fresh sign-in link, new or existing. shouldCreateUser
+      // makes this also provision a brand-new account.
+      const linkRes = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          shouldCreateUser: true,
+        },
+      })
+      if (linkRes.error) throw linkRes.error
+      setInviteMsg(
+        existing
+          ? `Access updated and a sign-in link sent to ${email}.`
+          : `Sign-in link sent to ${email}. If it doesn’t arrive, check spam.`,
+      )
       setInviteEmail('')
       setInviteClientIds(new Set())
       await load()
