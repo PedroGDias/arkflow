@@ -370,6 +370,13 @@ allow_dynamic_registration = false
 enabled = true
 verify_jwt = false
 
+# Public endpoint the login page calls to request a magic link (generated via
+# the admin API, sent via Gmail — bypasses GoTrue's email rate limit). Called by
+# unauthenticated users, so JWT verification is off; it has its own abuse guards.
+[functions.auth-link]
+enabled = true
+verify_jwt = false
+
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.
