@@ -6,6 +6,7 @@ import { AdminPage } from '../pages/AdminPage'
 import { ClientTeamPage } from '../pages/ClientTeamPage'
 import { ProtectedRoute } from './ProtectedRoute'
 import { AuthCallbackPage } from '../pages/AuthCallbackPage'
+import { AuthConfirmPage } from '../pages/AuthConfirmPage'
 import { useAuth } from '../context/AuthContext'
 
 function RoleHome() {
@@ -33,6 +34,7 @@ export function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/auth/callback" element={<AuthCallbackPage />} />
+      <Route path="/auth/confirm" element={<AuthConfirmPage />} />
       <Route
         path="/"
         element={

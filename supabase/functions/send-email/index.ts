@@ -84,14 +84,24 @@ function copyFor(type: EmailActionType) {
   )
 }
 
-// GoTrue verifies links at <project>/auth/v1/verify; it then 302s to redirect_to.
-function buildVerifyUrl(supabaseUrl: string, d: HookPayload['email_data']) {
+// Link the email to OUR app's /auth/confirm route — NOT GoTrue's /auth/v1/verify.
+//
+// GoTrue's /verify consumes its one-time token on a plain GET. Corporate mail
+// security (Microsoft Safe Links, Mimecast, Proofpoint, …) pre-fetches links
+// with an automated GET to scan them, which burns the token before the user
+// clicks → their real click then fails with "otp_expired". This is independent
+// of the link TTL, so raising otp_expiry does NOT fix it.
+//
+// Our /auth/confirm page instead completes sign-in with a verifyOtp POST that
+// fires only on the user's tap. A scanner's GET loads the page but consumes
+// nothing, so the token survives until the real user arrives.
+function buildConfirmUrl(d: HookPayload['email_data']) {
+  const origin = new URL(d.redirect_to || d.site_url).origin
   const params = new URLSearchParams({
-    token: d.token_hash,
+    token_hash: d.token_hash,
     type: d.email_action_type,
-    redirect_to: d.redirect_to || d.site_url,
   })
-  return `${supabaseUrl}/auth/v1/verify?${params.toString()}`
+  return `${origin}/auth/confirm?${params.toString()}`
 }
 
 const SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
@@ -204,9 +214,8 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? body.email_data.site_url
     const c = copyFor(body.email_data.email_action_type)
-    const url = buildVerifyUrl(supabaseUrl, body.email_data)
+    const url = buildConfirmUrl(body.email_data)
     const html = renderHtml({ lead: c.lead, cta: c.cta, url })
     await sendGmail(body.user.email, c.subject, html)
     return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } })
