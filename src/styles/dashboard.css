@@ -70,6 +70,10 @@ body {
 .page > main.section {
   flex: 1;
 }
+/* Client dashboard sits on a clean white canvas, not the ivory --bg. */
+.dashboard-page {
+  background: var(--white);
+}
 
 .wrap { width: 94%; max-width: 1440px; margin: 0 auto; padding: 0; }
 

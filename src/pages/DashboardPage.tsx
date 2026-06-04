@@ -8,6 +8,7 @@ import type { Automation, AutomationSummary, Client, ClientKpis, Run, TeamMember
 import { clientLogoUrl, uploadClientLogo } from '../lib/clientLogos'
 import { COST_ASSUMPTIONS, fmtTime, rel } from '../lib/roiMath'
 import { Tooltip } from '../components/Tooltip'
+import { ChangePassword } from '../components/ChangePassword'
 
 type AutoWithSummary = Automation & { summary: AutomationSummary | null }
 
@@ -2135,7 +2136,7 @@ export function DashboardPage() {
 
   return (
     <div
-      className="page"
+      className="page dashboard-page"
       style={{
         // Set all brand/green vars directly so .kpi-val.green, .auto-stat.good etc.
         // always pick up the live brand color without relying on :root indirection.
@@ -2274,6 +2275,7 @@ export function DashboardPage() {
                   ES
                 </button>
               </div>
+              <ChangePassword />
               <button
                 onClick={() => void signOut()}
                 className="hdr-ctl hdr-btn"

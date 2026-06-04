@@ -5,6 +5,7 @@ import { env } from '../lib/env'
 import { supabase } from '../lib/supabase'
 import type { Client } from '../lib/types'
 import { clientLogoUrl } from '../lib/clientLogos'
+import { ChangePassword } from '../components/ChangePassword'
 import '../styles/dashboard.css'
 
 type SkillStatus = { live: number; testing: number; offline: number }
@@ -189,6 +190,7 @@ export function ClientPickerPage() {
                   ES
                 </button>
               </div>
+              <ChangePassword />
               <button
                 onClick={() => void signOut()}
                 className="hdr-ctl hdr-btn"

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
 import { Tooltip } from '../components/Tooltip'
+import { ChangePassword } from '../components/ChangePassword'
 import '../styles/dashboard.css'
 
 type ClientRow = { id: number; client_name: string | null }
@@ -93,7 +94,7 @@ export function ClientTeamPage() {
       const { error } = await supabase.rpc('grant_client_access', { p_email: email, p_client_id: clientId })
       if (error) throw error
       setInviteEmail((s) => ({ ...s, [clientId]: '' }))
-      setRowMsg((s) => ({ ...s, [clientId]: `Access granted to ${email}. They'll get a sign-in link if they don't have an account.` }))
+      setRowMsg((s) => ({ ...s, [clientId]: `Access granted to ${email}. If they don't have an account yet, an Arkflow admin will email them a password.` }))
       await load()
     } catch (e) {
       setRowErr((s) => ({ ...s, [clientId]: e instanceof Error ? e.message : 'Failed to grant access' }))
@@ -148,6 +149,7 @@ export function ClientTeamPage() {
           <div className="header-r">
             <div className="header-ctls">
               <button onClick={() => nav('/')} className="hdr-ctl hdr-btn">Back</button>
+              <ChangePassword />
               <button onClick={() => void signOut()} className="hdr-ctl hdr-btn">Sign out</button>
             </div>
           </div>
@@ -159,7 +161,7 @@ export function ClientTeamPage() {
           <div className="topbar-label">Team access</div>
           <h1>Manage access</h1>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text3)', marginTop: 6, maxWidth: 620 }}>
-            Invite teammates to the dashboards you manage, or revoke their access. New people get an email sign-in link.
+            Invite teammates to the dashboards you manage, or revoke their access. New people receive a password by email once an Arkflow admin sets up their account.
           </div>
 
           {loadError ? <div className="error-msg" style={{ marginTop: 12 }}>{loadError}</div> : null}

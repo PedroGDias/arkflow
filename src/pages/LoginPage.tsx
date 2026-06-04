@@ -4,13 +4,15 @@ import { useAuth } from '../context/AuthContext'
 import { env } from '../lib/env'
 
 export function LoginPage() {
-  const { session, initializing, profileChecked, isLockedOut, profileError, signInWithGoogle, signInWithEmail, signOut, accounts } = useAuth()
+  const { session, initializing, profileChecked, isLockedOut, profileError, signInWithGoogle, signInWithEmailPassword, requestPasswordReset, signOut, accounts } = useAuth()
   const nav = useNavigate()
   const loc = useLocation()
   const [err, setErr] = useState<string | null>(null)
   const [email, setEmail] = useState('')
-  const [sendingLink, setSendingLink] = useState(false)
-  const [linkSentTo, setLinkSentTo] = useState<string | null>(null)
+  const [password, setPassword] = useState('')
+  const [signingIn, setSigningIn] = useState(false)
+  const [resetting, setResetting] = useState(false)
+  const [resetSentTo, setResetSentTo] = useState<string | null>(null)
 
   // If we land on /login while authenticated and the profile is OK, bounce home.
   useEffect(() => {
@@ -96,7 +98,7 @@ export function LoginPage() {
 
         {err ? <div className="error-msg" style={{ marginBottom: 12 }}>{err}</div> : null}
 
-        {linkSentTo ? (
+        {resetSentTo ? (
           <div
             style={{
               marginBottom: 12,
@@ -110,7 +112,7 @@ export function LoginPage() {
               lineHeight: 1.6,
             }}
           >
-            We’ve sent a sign-in link to <strong>{linkSentTo}</strong>. Click the link in the email to continue.
+            If an account exists for <strong>{resetSentTo}</strong>, a new password is on its way. Check your email, then sign in below.
           </div>
         ) : null}
 
@@ -147,15 +149,14 @@ export function LoginPage() {
           onSubmit={async (e) => {
             e.preventDefault()
             setErr(null)
-            setLinkSentTo(null)
-            setSendingLink(true)
+            setSigningIn(true)
             try {
-              await signInWithEmail(email)
-              setLinkSentTo(email.trim().toLowerCase())
+              await signInWithEmailPassword(email, password)
+              // ProtectedRoute / the redirect effect above take it from here.
             } catch (e2) {
-              setErr(e2 instanceof Error ? e2.message : 'Failed to send sign-in link')
+              setErr(e2 instanceof Error ? e2.message : 'Sign-in failed')
             } finally {
-              setSendingLink(false)
+              setSigningIn(false)
             }
           }}
           style={{ display: 'grid', gap: 8 }}
@@ -172,23 +173,57 @@ export function LoginPage() {
               padding: '12px 14px', background: 'var(--white)', fontFamily: 'var(--mono)', fontSize: 13,
             }}
           />
+          <input
+            type="password"
+            autoComplete="current-password"
+            required
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.currentTarget.value)}
+            style={{
+              width: '100%', borderRadius: 10, border: '1px solid var(--border)',
+              padding: '12px 14px', background: 'var(--white)', fontFamily: 'var(--mono)', fontSize: 13,
+            }}
+          />
           <button
             type="submit"
-            disabled={sendingLink || !email.trim()}
+            disabled={signingIn || !email.trim() || !password}
             style={{
               width: '100%', borderRadius: 10, border: '1px solid var(--border)',
               padding: '12px 14px', background: 'var(--white)',
-              fontFamily: 'var(--mono)', cursor: sendingLink ? 'wait' : 'pointer',
-              opacity: sendingLink || !email.trim() ? 0.6 : 1,
+              fontFamily: 'var(--mono)', cursor: signingIn ? 'wait' : 'pointer',
+              opacity: signingIn || !email.trim() || !password ? 0.6 : 1,
             }}
           >
-            {sendingLink ? 'Sending link…' : 'Email me a sign-in link'}
+            {signingIn ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
 
-        <div style={{ marginTop: 12, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text4)', lineHeight: 1.6 }}>
-          If this page loops, check Supabase Auth settings and allowed redirect URLs.
-        </div>
+        <button
+          type="button"
+          disabled={resetting || !email.trim()}
+          onClick={async () => {
+            setErr(null)
+            setResetSentTo(null)
+            setResetting(true)
+            try {
+              await requestPasswordReset(email)
+              setResetSentTo(email.trim().toLowerCase())
+            } catch (e2) {
+              setErr(e2 instanceof Error ? e2.message : 'Failed to request a new password')
+            } finally {
+              setResetting(false)
+            }
+          }}
+          style={{
+            marginTop: 12, background: 'none', border: 'none', padding: 0,
+            fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text3)',
+            cursor: resetting || !email.trim() ? 'default' : 'pointer',
+            textDecoration: 'underline', opacity: resetting || !email.trim() ? 0.5 : 1,
+          }}
+        >
+          {resetting ? 'Sending…' : 'Forgot your password? Email me a new one'}
+        </button>
       </div>
     </div>
   )

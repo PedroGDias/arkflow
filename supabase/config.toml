@@ -378,6 +378,14 @@ verify_jwt = false
 enabled = true
 verify_jwt = false
 
+# Generates a random password for a user and emails it (replaces magic links).
+# Does its own auth: an internal-admin JWT enables admin mode (any email, may
+# create the account); otherwise it's a throttled, existing-users-only self-serve
+# reset. So GoTrue JWT verification stays off and the function checks the caller.
+[functions.issue-password]
+enabled = true
+verify_jwt = false
+
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.

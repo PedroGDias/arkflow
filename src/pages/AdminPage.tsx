@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
 import { Tooltip } from '../components/Tooltip'
+import { ChangePassword } from '../components/ChangePassword'
 import '../styles/dashboard.css'
 
 type Profile = {
@@ -140,7 +141,7 @@ export function AdminPage() {
       if (insRes.error) throw insRes.error
 
       // If they already have an account, apply the client mappings + re-enable
-      // right away (the magic link below still gets sent so they can sign in).
+      // right away (the password email below still gets sent so they can sign in).
       const existing = profiles.find((p) => p.email.toLowerCase() === email)
       if (existing) {
         const exRes = await supabase
@@ -163,21 +164,19 @@ export function AdminPage() {
         await supabase.from('pending_invites').delete().eq('email', email)
       }
 
-      // Always send a fresh sign-in link, new or existing. shouldCreateUser
-      // makes this also provision a brand-new account.
-      const linkRes = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
-          shouldCreateUser: true,
-        },
-      })
-      if (linkRes.error) throw linkRes.error
-      setInviteMsg(
-        existing
-          ? `Access updated and a sign-in link sent to ${email}.`
-          : `Sign-in link sent to ${email}. If it doesn’t arrive, check spam.`,
-      )
+      if (existing) {
+        // They already have an account (and a password). Just apply access —
+        // don't reset their password. Use "Reset password" if they need one.
+        setInviteMsg(`Access updated for ${email}.`)
+      } else {
+        // Brand-new account: provision it and email an initial password.
+        // issue-password runs in admin mode, authorized by the admin's session JWT.
+        const pwRes = await supabase.functions.invoke('issue-password', {
+          body: { email, redirect_to: window.location.origin },
+        })
+        if (pwRes.error) throw pwRes.error
+        setInviteMsg(`Account created and a password emailed to ${email}. If it doesn’t arrive, check spam.`)
+      }
       setInviteEmail('')
       setInviteClientIds(new Set())
       await load()
@@ -188,25 +187,21 @@ export function AdminPage() {
     }
   }
 
-  // Email an existing user a fresh magic sign-in link. Surfaces the real result
-  // (incl. Supabase rate-limit / SMTP errors) so the admin knows whether it sent.
+  // Email an existing user a fresh random password. Surfaces the real result
+  // (incl. function errors) so the admin knows whether it sent.
   async function resendLink(email: string, userId: string) {
     if (!supabase) return
     setUsersMsg(null)
     setUsersErr(null)
     setBusy(`resend:${userId}`)
     try {
-      const res = await supabase.auth.signInWithOtp({
-        email: email.toLowerCase(),
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
-          shouldCreateUser: false,
-        },
+      const res = await supabase.functions.invoke('issue-password', {
+        body: { email: email.toLowerCase(), redirect_to: window.location.origin },
       })
       if (res.error) throw res.error
-      setUsersMsg(`Sign-in link sent to ${email}.`)
+      setUsersMsg(`New password emailed to ${email}.`)
     } catch (e) {
-      setUsersErr(e instanceof Error ? e.message : `Failed to send link to ${email}`)
+      setUsersErr(e instanceof Error ? e.message : `Failed to email a password to ${email}`)
     } finally {
       setBusy(null)
     }
@@ -406,6 +401,7 @@ export function AdminPage() {
           <div className="header-r">
             <div className="header-ctls">
               <button onClick={() => nav('/')} className="hdr-ctl hdr-btn">All clients</button>
+              <ChangePassword />
               <button onClick={() => void signOut()} className="hdr-ctl hdr-btn">Sign out</button>
             </div>
           </div>
@@ -635,13 +631,13 @@ export function AdminPage() {
 
                   <div style={actionCell}>
                     {!p.disabled_at ? (
-                      <Tooltip label="Email this user a fresh magic sign-in link">
+                      <Tooltip label="Email this user a fresh random password">
                         <button
                           onClick={() => void resendLink(p.email, p.id)}
                           disabled={busy === `resend:${p.id}`}
                           style={subtleLink}
                         >
-                          {busy === `resend:${p.id}` ? 'Sending…' : 'Resend link'}
+                          {busy === `resend:${p.id}` ? 'Sending…' : 'Reset password'}
                         </button>
                       </Tooltip>
                     ) : null}
@@ -858,7 +854,7 @@ const dangerLink: React.CSSProperties = {
   textAlign: 'right',
 }
 
-// Right-aligned stack of row actions (Resend link + Disable/Re-enable + Delete).
+// Right-aligned stack of row actions (Reset password + Disable/Re-enable + Delete).
 const actionCell: React.CSSProperties = {
   justifySelf: 'end',
   display: 'flex',

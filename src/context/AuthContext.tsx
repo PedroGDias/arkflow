@@ -32,7 +32,11 @@ type AuthState = {
   /** Error from the profile lookup, surfaced for debugging. */
   profileError: string | null
   signInWithGoogle: () => Promise<void>
-  signInWithEmail: (email: string) => Promise<void>
+  signInWithEmailPassword: (email: string, password: string) => Promise<void>
+  /** Set a new password for the currently signed-in user. */
+  changePassword: (newPassword: string) => Promise<void>
+  /** Ask the backend to email a fresh random password (self-serve "forgot password"). */
+  requestPasswordReset: (email: string) => Promise<void>
   signOut: () => Promise<void>
   accounts: string[]
 }
@@ -218,14 +222,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         })
         if (error) throw error
       },
-      signInWithEmail: async (email: string) => {
+      signInWithEmailPassword: async (email: string, password: string) => {
         if (env.authMode === 'mock') return
         if (!supabase) throw new Error('Supabase auth is not configured')
         const trimmed = email.trim().toLowerCase()
         if (!trimmed) throw new Error('Enter an email address')
-        const { error } = await supabase.auth.signInWithOtp({
-          email: trimmed,
-          options: { emailRedirectTo: `${redirectOrigin()}/auth/callback` },
+        if (!password) throw new Error('Enter your password')
+        const { error } = await supabase.auth.signInWithPassword({ email: trimmed, password })
+        if (error) throw error
+      },
+      changePassword: async (newPassword: string) => {
+        if (env.authMode === 'mock') return
+        if (!supabase) throw new Error('Supabase auth is not configured')
+        if (newPassword.length < 8) throw new Error('Use at least 8 characters')
+        const { error } = await supabase.auth.updateUser({ password: newPassword })
+        if (error) throw error
+      },
+      requestPasswordReset: async (email: string) => {
+        if (env.authMode === 'mock') return
+        if (!supabase) throw new Error('Supabase auth is not configured')
+        const trimmed = email.trim().toLowerCase()
+        if (!trimmed) throw new Error('Enter an email address')
+        // Self-serve mode: no Authorization header beyond the anon key, so the
+        // function emails a fresh password only if the account exists + is enabled.
+        const { error } = await supabase.functions.invoke('issue-password', {
+          body: { email: trimmed, redirect_to: window.location.origin },
         })
         if (error) throw error
       },
