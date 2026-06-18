@@ -204,7 +204,10 @@ export function ErpIngestionModal({ automationId, lang, title, onClose }: Props)
             <div className={`erp-email ${open ? 'open' : ''}`} key={email.id}>
               <button type="button" className="erp-email-summary" onClick={() => toggle(email.id)}>
                 <div className="erp-sum-main">
-                  <span className="erp-subject">{email.email_subject || '—'}</span>
+                  <div className="erp-subject-line">
+                    <span className="erp-subject">{email.email_subject || '—'}</span>
+                    <span className="erp-svc-count">{t.services(email.services.length)}</span>
+                  </div>
                   <div className="erp-contact">
                     {email.contact_name && <span className="erp-contact-item">{email.contact_name}</span>}
                     {email.contact_email && (
@@ -221,7 +224,6 @@ export function ErpIngestionModal({ automationId, lang, title, onClose }: Props)
                     )}
                   </div>
                 </div>
-                <span className="erp-svc-count">{t.services(email.services.length)}</span>
                 <span className="erp-date">{fmtDateTime(email.created_at, locale)}</span>
                 <svg className="erp-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
                   <path d="M4 6l4 4 4-4" />
