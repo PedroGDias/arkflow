@@ -310,6 +310,9 @@ export function DashboardPage() {
   const rowEls = useRef(new Map<number, HTMLDivElement>())
   const prevOpenIds = useRef<Set<number>>(new Set())
   const seededBrandOnce = useRef(false)
+  // True once load() has fully succeeded at least once. Lets the 30s background
+  // refresh swallow transient fetch failures instead of blanking good data.
+  const hasLoadedOkRef = useRef(false)
   const openTeamListKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -530,8 +533,18 @@ export function DashboardPage() {
   }
 
   // ── Data loading ─────────────────────────────────────────────────────────
-  async function load() {
-    setError(null)
+  async function load(opts?: { background?: boolean }) {
+    const background = opts?.background ?? false
+    // Foreground loads clear the error optimistically; a background (30s)
+    // refresh leaves the screen untouched until we know the outcome.
+    if (!background) setError(null)
+
+    // A single `fetch` in the Promise.all below can throw `TypeError: Failed to
+    // fetch` on a momentary network blip (wifi drop, wake-from-sleep, VPN).
+    // Retry a couple of times with a short backoff before surfacing anything.
+    const MAX_ATTEMPTS = 3
+    let lastErr: unknown = null
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       if (!supabase) {
         setClient(null)
@@ -542,6 +555,7 @@ export function DashboardPage() {
         setThreadTotalsByAuto(null)
         setThreadDayCountsByAuto(null)
         setError('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.')
+        setLoading(false)
         return
       }
       const sb = supabase
@@ -649,26 +663,48 @@ export function DashboardPage() {
         setThreadTotalsByAuto(null)
         setThreadDayCountsByAuto(null)
       }
-    } catch (e) {
-      // Supabase/PostgREST errors are plain objects, not Error instances —
-      // pull out their message/code so the UI shows something actionable.
+        // Reached here without throwing → the load succeeded.
+        setError(null)
+        hasLoadedOkRef.current = true
+        setLoading(false)
+        return
+      } catch (e) {
+        lastErr = e
+        // `TypeError: Failed to fetch` (and friends) are transient network
+        // failures, not real errors — retry before giving up.
+        const emsg = e instanceof Error ? e.message : String((e as { message?: string })?.message ?? e)
+        const transient =
+          e instanceof TypeError ||
+          /failed to fetch|networkerror|load failed|fetch failed|network request failed/i.test(emsg)
+        if (transient && attempt < MAX_ATTEMPTS) {
+          await new Promise((r) => window.setTimeout(r, attempt * 500))
+          continue
+        }
+        break
+      }
+    }
+
+    // Every attempt failed. Supabase/PostgREST errors are plain objects, not
+    // Error instances — pull out their message/code for an actionable message.
+    console.error('[dashboard] load failed', lastErr)
+    // A transient failure during a background refresh, when there is already
+    // data on screen, must NOT blank the dashboard — keep showing what we have.
+    if (!(background && hasLoadedOkRef.current)) {
       let msg = 'Failed to load'
-      if (e instanceof Error) {
-        msg = e.message
-      } else if (e && typeof e === 'object') {
-        const pe = e as { message?: string; code?: string; details?: string }
+      if (lastErr instanceof Error) {
+        msg = lastErr.message
+      } else if (lastErr && typeof lastErr === 'object') {
+        const pe = lastErr as { message?: string; code?: string; details?: string }
         msg = [pe.message, pe.code ? `(${pe.code})` : null, pe.details].filter(Boolean).join(' ') || msg
       }
-      console.error('[dashboard] load failed', e)
       setError(msg)
-    } finally {
-      setLoading(false)
     }
+    setLoading(false)
   }
 
   useEffect(() => {
     void load()
-    const interval = window.setInterval(() => void load(), 30000)
+    const interval = window.setInterval(() => void load({ background: true }), 30000)
     return () => window.clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cid])
