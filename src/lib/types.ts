@@ -46,6 +46,35 @@ export type TeamMember = {
   sort_order?: number | null
 }
 
+// ── ERP Quote Ingestion (automation 21, Autocares Julia) ───────────────────────
+
+export type ErpIngestionEmail = {
+  id: number
+  created_at: string
+  automation_id: number
+  email_id: string | null
+  email_subject: string | null
+  contact_name: string | null
+  contact_email: string | null
+  contact_phone: string | null
+}
+
+export type ErpIngestionService = {
+  id: number
+  created_at: string
+  email_row_id: number
+  origin: string | null
+  destination: string | null
+  passengers: string | null
+  departure_datetime: string | null
+  arrival_datetime: string | null
+  itinerary: string | null
+}
+
+export type ErpIngestionEmailWithServices = ErpIngestionEmail & {
+  services: ErpIngestionService[]
+}
+
 // ── RPC return types ──────────────────────────────────────────────────────────
 
 export type ClientKpis = {

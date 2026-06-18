@@ -9,6 +9,7 @@ import { clientLogoUrl, uploadClientLogo } from '../lib/clientLogos'
 import { COST_ASSUMPTIONS, fmtTime, rel } from '../lib/roiMath'
 import { Tooltip } from '../components/Tooltip'
 import { ChangePassword } from '../components/ChangePassword'
+import { ErpIngestionTable } from '../components/ErpIngestionTable'
 
 type AutoWithSummary = Automation & { summary: AutomationSummary | null }
 
@@ -504,6 +505,16 @@ export function DashboardPage() {
       .map((s) => String(s).toLowerCase())
       .join(' ')
     return candidates.includes('quote') || candidates.includes('presupuesto')
+  }
+
+  // ERP Quote Ingestion automations get an extra request/services table. Matched by
+  // name (not id) so it survives the move to multiple cities, in either language.
+  function isErpIngestionAutomation(a: Automation) {
+    const candidates = [a.automation_name_en, a.automation_name_local, a.automation_name_es, a.automation_name]
+      .filter(Boolean)
+      .map((s) => String(s).toLowerCase())
+      .join(' ')
+    return candidates.includes('erp')
   }
 
   function baseNameForGrouping(
@@ -1568,6 +1579,9 @@ export function DashboardPage() {
     const isOpen = openLiveGroupIds.has(groupKey)
     const canEditCommon = groupAutos.length > 0
     const inputsOpen = openInputsGroupIds.has(groupKey)
+    // ERP groups render the per-city breakdown (with its charts) even with one city,
+    // and add a request/services table inside each city.
+    const isErpGroup = groupAutos.some(isErpIngestionAutomation)
 
     return (
       <div key={groupKey} className={`auto-row ${isOpen ? 'open' : ''}`}>
@@ -1718,7 +1732,7 @@ export function DashboardPage() {
           </div>
 
           {/* Per-city breakdown — accordion rows */}
-          {groupAutos.length > 1 && (
+          {(groupAutos.length > 1 || isErpGroup) && (
             <div className="city-rows">
               {groupAutos.map((a) => {
                 const base = baseNameForGrouping(a)
@@ -1937,6 +1951,11 @@ export function DashboardPage() {
                           </div>
                         </div>
                       </div>
+
+                      {/* ERP request/services table — lazy-loads when the city is expanded. */}
+                      {isErpIngestionAutomation(a) && isCityOpen && (
+                        <ErpIngestionTable automationId={a.id} lang={lang} />
+                      )}
                     </div>
                   </div>
                 )

@@ -549,6 +549,66 @@ body {
 .strip-num .sn-val { font-family: var(--mono); font-size: 15px; font-weight: 500; color: var(--text); }
 .strip-num .sn-val.green { color: var(--green); }
 .strip-num .sn-val.dim { color: var(--text3); }
+/* ── ERP Quote Ingestion — request/services table ─────────────────────────── */
+.erp-strip .strip-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.erp-search {
+  font-family: var(--sans); font-size: 11px; color: var(--text);
+  text-transform: none; letter-spacing: 0;
+  border: 1px solid var(--border); border-radius: 7px;
+  padding: 5px 9px; background: var(--white); width: 190px; max-width: 45%;
+}
+.erp-search::placeholder { color: var(--text4); }
+.erp-search:focus { outline: none; border-color: color-mix(in oklab, var(--brand) 45%, var(--border)); }
+.erp-body { background: var(--white); }
+.erp-loading, .erp-empty {
+  font-family: var(--mono); font-size: 12px; color: var(--text3);
+  text-align: center; padding: 18px 16px;
+}
+.erp-email { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.erp-email:last-child { border-bottom: 0; }
+.erp-email-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.erp-subject { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.3; }
+.erp-date { font-family: var(--mono); font-size: 11px; color: var(--text3); white-space: nowrap; }
+.erp-contact {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
+  margin-top: 4px; font-size: 11px; color: var(--text2);
+}
+.erp-contact-item { display: inline-flex; align-items: center; gap: 4px; }
+.erp-contact-item .lbl {
+  font-family: var(--mono); font-size: 9px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text4);
+}
+.erp-svc-count {
+  font-family: var(--mono); font-size: 10px; color: var(--brand);
+  background: var(--brand-bg); border-radius: 5px; padding: 1px 6px;
+}
+.erp-no-services { font-family: var(--mono); font-size: 10px; color: var(--text4); margin-top: 8px; }
+.erp-services { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.erp-services th {
+  font-family: var(--mono); font-size: 9px; font-weight: 500; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text4); text-align: left;
+  padding: 4px 8px; border-bottom: 1px solid var(--border);
+}
+.erp-services td {
+  font-size: 11.5px; color: var(--text); padding: 5px 8px;
+  border-bottom: 1px solid var(--bg); vertical-align: top;
+}
+.erp-services tr:last-child td { border-bottom: 0; }
+.erp-route { white-space: nowrap; }
+.erp-route .arr { color: var(--text4); margin: 0 5px; }
+.erp-pax { font-family: var(--mono); white-space: nowrap; }
+.erp-dt { font-family: var(--mono); font-size: 11px; color: var(--text2); white-space: nowrap; }
+.erp-itin { color: var(--text2); font-size: 11px; max-width: 280px; }
+.erp-more { display: flex; justify-content: center; padding: 10px; border-top: 1px solid var(--border); background: var(--white); }
+.erp-more button {
+  font-family: var(--mono); font-size: 11px; color: var(--text2); cursor: pointer;
+  background: var(--white); border: 1px solid var(--border); border-radius: 7px; padding: 6px 16px;
+}
+.erp-more button:hover { background: var(--bg); }
+.erp-more button:disabled { opacity: 0.5; cursor: default; }
+
 .strip-charts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1px; background: var(--border); }
 .strip-charts.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .strip-chart { background: var(--white); padding: 14px 16px; }
