@@ -18,7 +18,7 @@ type Props = {
 const COPY = {
   EN: {
     requests: 'quote requests',
-    search: 'Search subject…',
+    search: 'Search subject, contact, message…',
     services: (n: number) => `${n} ${n === 1 ? 'service' : 'services'}`,
     route: 'Route',
     pax: 'Passengers',
@@ -36,7 +36,7 @@ const COPY = {
   },
   ES: {
     requests: 'solicitudes de presupuesto',
-    search: 'Buscar asunto…',
+    search: 'Buscar asunto, contacto, mensaje…',
     services: (n: number) => `${n} ${n === 1 ? 'servicio' : 'servicios'}`,
     route: 'Trayecto',
     pax: 'Pasajeros',
@@ -76,8 +76,17 @@ export function ErpIngestionModal({ automationId, lang, title, onClose }: Props)
   const [loading, setLoading] = useState(true)
   const [hasMore, setHasMore] = useState(false)
   const [errored, setErrored] = useState(false)
+  const [openIds, setOpenIds] = useState<Set<number>>(() => new Set())
   // Bumped on every search change so a stale in-flight fetch can't overwrite fresh results.
   const reqId = useRef(0)
+
+  const toggle = (id: number) =>
+    setOpenIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   const fetchPage = useCallback(
     async (search: string, offset: number) => {
@@ -96,8 +105,20 @@ export function ErpIngestionModal({ automationId, lang, title, onClose }: Props)
         .eq('automation_id', automationId)
         .order('created_at', { ascending: false })
         .range(offset, offset + PAGE_SIZE - 1)
-      const term = search.trim()
-      if (term) q = q.ilike('email_subject', `%${term}%`)
+      // Match across subject, contact, and the original message body. Strip
+      // commas/parens so the user's text can't break PostgREST's or() syntax.
+      const term = search.trim().replace(/[,()]/g, ' ').trim()
+      if (term) {
+        const like = `%${term}%`
+        q = q.or(
+          [
+            `email_subject.ilike.${like}`,
+            `contact_name.ilike.${like}`,
+            `contact_email.ilike.${like}`,
+            `source_message.ilike.${like}`,
+          ].join(','),
+        )
+      }
 
       const { data: emails, error } = await q
       if (myReq !== reqId.current) return // a newer search superseded this one
@@ -177,29 +198,37 @@ export function ErpIngestionModal({ automationId, lang, title, onClose }: Props)
         </div>
 
         <div className="erp-modal-body">
-          {rows.map((email) => (
-            <div className="erp-email" key={email.id}>
-              <div className="erp-email-head">
-                <span className="erp-subject">{email.email_subject || '—'}</span>
-                <span className="erp-date">{fmtDateTime(email.created_at, locale)}</span>
-              </div>
-              <div className="erp-contact">
-                {email.contact_name && <span className="erp-contact-item">{email.contact_name}</span>}
-                {email.contact_email && (
-                  <span className="erp-contact-item">
-                    <span className="lbl">@</span>
-                    {email.contact_email}
-                  </span>
-                )}
-                {email.contact_phone && (
-                  <span className="erp-contact-item">
-                    <span className="lbl">tel</span>
-                    {email.contact_phone}
-                  </span>
-                )}
+          {rows.map((email) => {
+            const open = openIds.has(email.id)
+            return (
+            <div className={`erp-email ${open ? 'open' : ''}`} key={email.id}>
+              <button type="button" className="erp-email-summary" onClick={() => toggle(email.id)}>
+                <div className="erp-sum-main">
+                  <span className="erp-subject">{email.email_subject || '—'}</span>
+                  <div className="erp-contact">
+                    {email.contact_name && <span className="erp-contact-item">{email.contact_name}</span>}
+                    {email.contact_email && (
+                      <span className="erp-contact-item">
+                        <span className="lbl">@</span>
+                        {email.contact_email}
+                      </span>
+                    )}
+                    {email.contact_phone && (
+                      <span className="erp-contact-item">
+                        <span className="lbl">tel</span>
+                        {email.contact_phone}
+                      </span>
+                    )}
+                  </div>
+                </div>
                 <span className="erp-svc-count">{t.services(email.services.length)}</span>
-              </div>
+                <span className="erp-date">{fmtDateTime(email.created_at, locale)}</span>
+                <svg className="erp-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M4 6l4 4 4-4" />
+                </svg>
+              </button>
 
+              {open && (
               <div className="erp-email-grid">
                 <div className="erp-col-services">
                   <div className="erp-col-head">{t.services_h}</div>
@@ -240,8 +269,10 @@ export function ErpIngestionModal({ automationId, lang, title, onClose }: Props)
                   <pre className="erp-source">{email.source_message || '—'}</pre>
                 </div>
               </div>
+              )}
             </div>
-          ))}
+            )
+          })}
 
           {loading && <div className="erp-loading">{t.loading}</div>}
           {!loading && rows.length === 0 && (
