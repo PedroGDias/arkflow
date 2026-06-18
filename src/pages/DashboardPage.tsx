@@ -9,7 +9,7 @@ import { clientLogoUrl, uploadClientLogo } from '../lib/clientLogos'
 import { COST_ASSUMPTIONS, fmtTime, rel } from '../lib/roiMath'
 import { Tooltip } from '../components/Tooltip'
 import { ChangePassword } from '../components/ChangePassword'
-import { ErpIngestionTable } from '../components/ErpIngestionTable'
+import { ErpIngestionModal } from '../components/ErpIngestionModal'
 
 type AutoWithSummary = Automation & { summary: AutomationSummary | null }
 
@@ -304,6 +304,8 @@ export function DashboardPage() {
   const [openInputsGroupIds, setOpenInputsGroupIds] = useState<Set<string>>(() => new Set())
   const [openInputsCityIds, setOpenInputsCityIds] = useState<Set<number>>(() => new Set())
   const [activeTab, setActiveTab] = useState<'team' | 'opportunities'>('team')
+  // ERP Quote Ingestion requests open in a modal, keyed by automation id + title.
+  const [erpModal, setErpModal] = useState<{ id: number; title: string } | null>(null)
 
   const rowEls = useRef(new Map<number, HTMLDivElement>())
   const prevOpenIds = useRef<Set<number>>(new Set())
@@ -1952,9 +1954,18 @@ export function DashboardPage() {
                         </div>
                       </div>
 
-                      {/* ERP request/services table — lazy-loads when the city is expanded. */}
-                      {isErpIngestionAutomation(a) && isCityOpen && (
-                        <ErpIngestionTable automationId={a.id} lang={lang} />
+                      {/* ERP request/services — opens in a modal. */}
+                      {isErpIngestionAutomation(a) && (
+                        <button
+                          type="button"
+                          className="erp-open-btn"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setErpModal({ id: a.id, title: displayAutomationName(a) })
+                          }}
+                        >
+                          {lang === 'ES' ? 'Ver solicitudes de presupuesto' : 'View quote requests'}
+                        </button>
                       )}
                     </div>
                   </div>
@@ -2503,6 +2514,15 @@ export function DashboardPage() {
           <a href="#">Arkflow</a> · {lang === 'EN' ? 'AI workers that do the work' : 'IA que trabaja por ti'}
         </div>
       </footer>
+
+      {erpModal && (
+        <ErpIngestionModal
+          automationId={erpModal.id}
+          title={erpModal.title}
+          lang={lang}
+          onClose={() => setErpModal(null)}
+        />
+      )}
     </div>
   )
 }
