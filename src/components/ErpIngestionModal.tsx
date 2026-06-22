@@ -54,7 +54,11 @@ const COPY = {
   },
 } as const
 
-function fmtDateTime(s: string | null, locale: string) {
+// `timeZone` is passed for parsed service times: they're stored with a +00
+// offset, so formatting in UTC echoes the inserted wall-clock value verbatim,
+// regardless of where the viewer's browser sits. Omit it (created_at etc.) to
+// render in the viewer's local zone.
+function fmtDateTime(s: string | null, locale: string, timeZone?: string) {
   if (!s) return '—'
   const d = new Date(s)
   if (Number.isNaN(d.getTime())) return s
@@ -64,6 +68,7 @@ function fmtDateTime(s: string | null, locale: string) {
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
+    ...(timeZone ? { timeZone } : {}),
   })
 }
 
@@ -258,8 +263,8 @@ export function ErpIngestionModal({ automationId, lang, title, onClose }: Props)
                               {s.destination || '—'}
                             </td>
                             <td className="erp-pax">{s.passengers || '—'}</td>
-                            <td className="erp-dt">{fmtDateTime(s.departure_datetime, locale)}</td>
-                            <td className="erp-dt">{fmtDateTime(s.arrival_datetime, locale)}</td>
+                            <td className="erp-dt">{fmtDateTime(s.departure_datetime, locale, 'UTC')}</td>
+                            <td className="erp-dt">{fmtDateTime(s.arrival_datetime, locale, 'UTC')}</td>
                             <td className="erp-itin">{s.itinerary || '—'}</td>
                           </tr>
                         ))}
