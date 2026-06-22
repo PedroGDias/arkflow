@@ -173,6 +173,10 @@ export function ErpIngestionModal({ automationId, lang, title, onClose }: Props)
     }
   }, [onClose])
 
+  // Hide requests that parsed no services. `rows` stays raw so the "See more"
+  // offset keeps counting every fetched email, not just the visible ones.
+  const visibleRows = rows.filter((e) => e.services.length > 0)
+
   return createPortal(
     <div className="erp-modal-overlay" onClick={onClose}>
       <div className="erp-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
@@ -180,7 +184,7 @@ export function ErpIngestionModal({ automationId, lang, title, onClose }: Props)
           <div className="erp-modal-title">
             {title}
             <span className="erp-modal-sub">
-              {rows.length}
+              {visibleRows.length}
               {hasMore ? '+' : ''} {t.requests}
             </span>
           </div>
@@ -198,7 +202,7 @@ export function ErpIngestionModal({ automationId, lang, title, onClose }: Props)
         </div>
 
         <div className="erp-modal-body">
-          {rows.map((email) => {
+          {visibleRows.map((email) => {
             const open = openIds.has(email.id)
             return (
             <div className={`erp-email ${open ? 'open' : ''}`} key={email.id}>
@@ -277,7 +281,7 @@ export function ErpIngestionModal({ automationId, lang, title, onClose }: Props)
           })}
 
           {loading && <div className="erp-loading">{t.loading}</div>}
-          {!loading && rows.length === 0 && (
+          {!loading && visibleRows.length === 0 && !hasMore && (
             <div className="erp-empty">{query.trim() ? t.noMatch : errored ? '—' : t.empty}</div>
           )}
 
