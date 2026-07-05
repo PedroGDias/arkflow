@@ -501,7 +501,22 @@ export function DashboardPage() {
     // ES must use automation_name_local when present (fallbacks keep legacy compatibility)
     const es = (a.automation_name_local ?? a.automation_name_es ?? a.automation_name ?? '').toString()
     const chosen = lang === 'ES' ? es : en
-    return chosen.trim() || (a.automation_name ?? '').toString().trim() || '—'
+    const name = chosen.trim() || (a.automation_name ?? '').toString().trim() || '—'
+    if (name === '—') return name
+    // The city used to live inside the name ("Task - City"); a later migration
+    // moved it to its own column. Re-append it so automations across cities stay
+    // distinguishable in this (legacy) app.
+    const task = splitTaskCity(name).task
+    const city = cityOf(a)
+    return city ? `${task} - ${city}` : task
+  }
+
+  // City now lives in its own column (a later migration split it out of the name).
+  // Fall back to the old "Task - City" suffix for any un-migrated rows.
+  function cityOf(a: Automation): string | null {
+    const col = (a.city ?? '').toString().trim()
+    if (col) return col
+    return splitTaskCity(baseNameForGrouping(a)).city
   }
 
   function isQuoteAutomation(a: Automation) {
@@ -1475,8 +1490,7 @@ export function DashboardPage() {
                   totalThreads != null && totalThreads > 0 && completedThreads != null ? (completedThreads / totalThreads) * 100 : null
                 const hangingPct = totalThreads != null && totalThreads > 0 && hangingThreads != null ? (hangingThreads / totalThreads) * 100 : null
 
-                const base = baseNameForGrouping(a)
-                const { city } = splitTaskCity(base)
+                const city = cityOf(a)
                 const displayCity = city ?? displayAutomationName(a)
 
                 const sampleSize = coerceFiniteNumber(a.manual_sample_size)
@@ -1773,8 +1787,7 @@ export function DashboardPage() {
           {(groupAutos.length > 1 || isErpGroup) && (
             <div className="city-rows">
               {groupAutos.map((a) => {
-                const base = baseNameForGrouping(a)
-                const { city } = splitTaskCity(base)
+                const city = cityOf(a)
                 const citySm = a.summary
                 const cityRuns = citySm?.run_count ?? 0
                 const cityAvg = citySm && citySm.avg_response_s > 0 ? citySm.avg_response_s : null
@@ -2385,7 +2398,7 @@ export function DashboardPage() {
                 const nTasks = auditGroups.length
                 const uniqueCities = new Set(
                   auditGroups.flatMap((g) =>
-                    g.rows.map((a) => splitTaskCity(baseNameForGrouping(a)).city).filter(Boolean)
+                    g.rows.map((a) => cityOf(a)).filter(Boolean)
                   )
                 )
                 const nLocs = uniqueCities.size || auditGroups.reduce((s, g) => s + g.rows.length, 0)

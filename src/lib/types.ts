@@ -13,6 +13,9 @@ export type Automation = {
   manual_execution_time_min?: number | null
   manual_hourly_cost?: number | null
   auto_monthly_cost?: number | null
+  /** City the automation serves. A later migration split this out of the name
+   *  ("Task - City") into its own column. */
+  city?: string | null
   /** Automation row insertion time (Postgres created_at); used as deployment date in UI. */
   created_at?: string | null
 }
